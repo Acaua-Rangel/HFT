@@ -12,7 +12,7 @@ export class CycleEvaluator {
     private readonly mathEngine: MathEngine
   ) {}
 
-  public evaluate(pairs: TriangularPairs, fee: Fee, initialAmount: Amount): Amount {
+  public evaluate(pairs: TriangularPairs, fee1: Fee, fee2: Fee, fee3: Fee, initialAmount: Amount): Amount {
     let profitResult = new Amount(0);
 
     pairs.apply((first: Pair, second: Pair, third: Pair) => {
@@ -25,7 +25,9 @@ export class CycleEvaluator {
         firstBook,
         secondBook,
         thirdBook,
-        fee
+        fee1,
+        fee2,
+        fee3
       );
     });
 

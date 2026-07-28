@@ -22,6 +22,10 @@ class SubscriptionMap {
     this.map.set(symbol, pair);
   }
 
+  public has(symbol: string): boolean {
+    return this.map.has(symbol);
+  }
+
   public find(symbol: string, callback: (pair: Pair) => void): void {
     const found = this.map.get(symbol);
     const hasFound = found !== undefined;
@@ -32,29 +36,51 @@ class SubscriptionMap {
 }
 
 class IngestorState {
-  private pendingPayloads: string[] = [];
+  private pendingStreams: string[] = [];
 
   constructor(
     private readonly ws: WebSocket,
     private readonly subscriptions: SubscriptionMap
   ) {
-    this.ws.onopen = this.flushPending.bind(this);
+    this.ws.onopen = () => {
+      console.log("📡 Binance WebSocket connected. Subscribing to streams...");
+      this.flushPending();
+    };
+    this.ws.onerror = (err) => {
+      console.error("❌ Binance WebSocket error:", err);
+    };
+    this.ws.onclose = () => {
+      console.warn("⚠️ Binance WebSocket disconnected.");
+    };
   }
 
   private flushPending(): void {
-    this.pendingPayloads.forEach(payload => {
-      this.ws.send(payload);
-    });
-    this.pendingPayloads = [];
+    if (this.pendingStreams.length === 0) return;
+
+    // Batch ALL streams into a single SUBSCRIBE message
+    const payload = {
+      method: "SUBSCRIBE",
+      params: this.pendingStreams,
+      id: Date.now(),
+    };
+    this.ws.send(JSON.stringify(payload));
+    console.log(`📡 Subscribed to ${this.pendingStreams.length} streams: ${this.pendingStreams.join(", ")}`);
+    this.pendingStreams = [];
   }
 
-  public sendToWs(payloadString: string): void {
+  public queueStream(streamName: string): void {
     const isOpen = this.ws.readyState === WebSocket.OPEN;
     if (isOpen) {
-      this.ws.send(payloadString);
+      // WS already open, send immediately as single batch
+      const payload = {
+        method: "SUBSCRIBE",
+        params: [streamName],
+        id: Date.now(),
+      };
+      this.ws.send(JSON.stringify(payload));
       return;
     }
-    this.pendingPayloads = [...this.pendingPayloads, payloadString];
+    this.pendingStreams.push(streamName);
   }
 
   public attachWsHandler(handler: (event: MessageEvent) => void): void {
@@ -65,6 +91,10 @@ class IngestorState {
     this.subscriptions.register(symbol, pair);
   }
 
+  public isSubscribed(symbol: string): boolean {
+    return this.subscriptions.has(symbol);
+  }
+
   public findPairAndApply(symbol: string, callback: (pair: Pair) => void): void {
     this.subscriptions.find(symbol, callback);
   }
@@ -73,6 +103,7 @@ class IngestorState {
 export class BinancePriceIngestor implements PriceIngestor {
   private readonly callbacks: IngestorCallbacks = new IngestorCallbacks();
   private readonly state: IngestorState;
+  private tickCount = 0;
 
   constructor() {
     this.state = new IngestorState(
@@ -84,23 +115,16 @@ export class BinancePriceIngestor implements PriceIngestor {
 
   public subscribe(pair: Pair): void {
     pair.applyBinanceStreamFormat((streamName) => {
-      this.sendSubscriptionPayload(streamName);
-      this.registerPairMapping(streamName, pair);
+      const symbolStr = streamName.replace("@bookTicker", "").toUpperCase();
+
+      // Deduplicate: don't subscribe twice for the same symbol
+      if (this.state.isSubscribed(symbolStr)) {
+        return;
+      }
+
+      this.state.queueStream(streamName);
+      this.state.registerSubscription(symbolStr, pair);
     });
-  }
-
-  private sendSubscriptionPayload(streamName: string): void {
-    const payload = {
-      method: "SUBSCRIBE",
-      params: [streamName],
-      id: Date.now(),
-    };
-    this.state.sendToWs(JSON.stringify(payload));
-  }
-
-  private registerPairMapping(streamName: string, pair: Pair): void {
-    const symbolStr = streamName.replace("@bookTicker", "").toUpperCase();
-    this.state.registerSubscription(symbolStr, pair);
   }
 
   public onTick(callback: (tick: Tick) => void): void {
@@ -121,6 +145,14 @@ export class BinancePriceIngestor implements PriceIngestor {
 
     const symbol = String(payload.s);
     const askPriceVal = parseFloat(String(payload.a));
+
+    this.tickCount++;
+    if (this.tickCount === 1) {
+      console.log(`📈 First tick received: ${symbol} @ ${askPriceVal}`);
+    }
+    if (this.tickCount % 1000 === 0) {
+      console.log(`📈 ${this.tickCount} ticks processed. Latest: ${symbol} @ ${askPriceVal}`);
+    }
 
     this.state.findPairAndApply(symbol, (pair) => {
       this.createAndNotifyTick(pair, askPriceVal);

@@ -19,20 +19,30 @@ export class ArbitrageCycle {
     initialAmount: Amount,
     minProfit: Amount
   ): Promise<Amount> {
-    let firstPairToFetchFee: Pair | undefined;
-    pairs.apply((first) => {
-      firstPairToFetchFee = first;
+    let fee1: any, fee2: any, fee3: any;
+    
+    await pairs.applyAsync(async (first, second, third) => {
+      fee1 = await feeFetcher.fetchFeeFor(first);
+      fee2 = await feeFetcher.fetchFeeFor(second);
+      fee3 = await feeFetcher.fetchFeeFor(third);
     });
 
-    const fee = await feeFetcher.fetchFeeFor(firstPairToFetchFee!);
-    const profit = this.evaluator.evaluate(pairs, fee, initialAmount);
+    const profit = this.evaluator.evaluate(pairs, fee1, fee2, fee3, initialAmount);
     
     const isViable = mathEngine.isProfitable(profit, minProfit);
     if (!isViable) {
-      return profit;
+      return profit; // Return theoretical profit
     }
 
-    this.executor.executeCycle(pairs, initialAmount);
-    return profit;
+    const fill = await this.executor.executeCycle(pairs, initialAmount);
+    
+    let actualProfit = profit;
+    fill.apply((qty, quote, price, success) => {
+      if (success) {
+        actualProfit = quote.subtract(initialAmount);
+      }
+    });
+
+    return actualProfit;
   }
 }

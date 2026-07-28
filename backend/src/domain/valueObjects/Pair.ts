@@ -20,4 +20,17 @@ export class Pair {
       });
     });
   }
+
+  public applyBinanceSymbol(callback: (symbol: string) => void): void {
+    this.base.applySymbol((baseSym) => {
+      this.quote.applySymbol((quoteSym) => {
+        const symbol = `${baseSym.toUpperCase()}${quoteSym.toUpperCase()}`;
+        callback(symbol);
+      });
+    });
+  }
+
+  public applyCurrencies(callback: (base: Currency, quote: Currency) => void): void {
+    callback(this.base, this.quote);
+  }
 }

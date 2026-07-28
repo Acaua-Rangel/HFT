@@ -14,80 +14,104 @@ import { Pair } from "./src/domain/valueObjects/Pair";
 import { TriangularPairs, PairTuple } from "./src/application/TriangularPairs";
 import { Amount } from "./src/domain/valueObjects/Amount";
 import { BinanceBalanceFetcher } from "./src/infrastructure/BinanceBalanceFetcher";
+import { VirtualBalanceManager } from "./src/infrastructure/VirtualBalanceManager";
+import { SimulatedOrderExecutor } from "./src/infrastructure/SimulatedOrderExecutor";
+import { TradingMode } from "./src/domain/valueObjects/TradingMode";
 
 console.log("🚀 Starting HFT Triangular Arbitrage Engine...");
 
-// 1. Database Setup
+const envMode = process.env.TRADING_MODE === "LIVE" ? TradingMode.LIVE : TradingMode.SIMULATION;
+let currentMode = envMode;
+
+const initialSimBalanceEnv = parseFloat(process.env.SIMULATION_BALANCE || "1000");
+let virtualBalanceManager = new VirtualBalanceManager(new Amount(initialSimBalanceEnv));
+
 const dbPath = new DatabaseFilePath("./hft.sqlite");
 const db = DatabaseFactory.create(dbPath);
 const asyncWriter = AsyncWriterFactory.create(db);
 const transactionRepo = new TransactionRepository(asyncWriter);
 const errorRepo = new ErrorLogRepository(asyncWriter);
 
-// 2. Engine Components
-const executor = new BinanceOrderExecutor(errorRepo);
-const feeFetcher = new BinanceFeeFetcher();
 const stateManager = new LocalStateManager();
 const mathEngine = new ArbitrageMathEngine();
 const ingestor = new BinancePriceIngestor();
 const balanceFetcher = new BinanceBalanceFetcher();
+const feeFetcher = new BinanceFeeFetcher();
 
-// 3. Application Use Cases
+const binanceExecutor = new BinanceOrderExecutor(errorRepo, transactionRepo);
+let simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo);
+
+const getExecutor = () => {
+    return currentMode.isLive() ? binanceExecutor : simulatedExecutor;
+};
+
 const cycleEvaluator = new CycleEvaluator(stateManager, mathEngine);
-const cycleExecutor = new CycleExecutor(executor, transactionRepo);
+const cycleExecutor = new CycleExecutor(getExecutor, errorRepo, transactionRepo);
 const arbitrageCycle = new ArbitrageCycle(cycleEvaluator, cycleExecutor);
 
-// 4. Domain Setup
 const brl = new Currency("BRL");
-const btc = new Currency("BTC");
 const eth = new Currency("ETH");
+const btc = new Currency("BTC");
 
-// Binance standard symbols: BTCBRL, ETHBTC, ETHBRL
-const btcBrl = new Pair(btc, brl);
-const ethBtc = new Pair(eth, btc);
-const ethBrl = new Pair(eth, brl);
+function createCCVTriangle(baseStr: string, quoteStr: string): TriangularPairs {
+    const base = new Currency(baseStr);
+    const quote = new Currency(quoteStr);
+    
+    const quoteBrl = new Pair(quote, brl);
+    const baseQuote = new Pair(base, quote);
+    const baseBrl = new Pair(base, brl);
 
-const pairTuple = new PairTuple(btcBrl, ethBtc);
-const triangularPairs = new TriangularPairs(pairTuple, ethBrl);
+    const tuple = new PairTuple(quoteBrl, baseQuote);
+    return new TriangularPairs(tuple, baseBrl);
+}
 
-stateManager.registerPair(btcBrl);
-stateManager.registerPair(ethBtc);
-stateManager.registerPair(ethBrl);
+const activeTriangles: TriangularPairs[] = [
+    createCCVTriangle("ETH", "BTC"),
+    createCCVTriangle("PEPE", "USDT"),
+    createCCVTriangle("SHIB", "USDT"),
+    createCCVTriangle("DOGE", "USDT"),
+];
 
-ingestor.subscribe(btcBrl);
-ingestor.subscribe(ethBtc);
-ingestor.subscribe(ethBrl);
+activeTriangles.forEach(t => {
+    t.apply((first, second, third) => {
+        stateManager.registerPair(first);
+        stateManager.registerPair(second);
+        stateManager.registerPair(third);
+        
+        ingestor.subscribe(first);
+        ingestor.subscribe(second);
+        ingestor.subscribe(third);
+    });
+});
 
-// 4.1 Wire Ingestor to StateManager
 ingestor.onTick((tick) => {
     stateManager.updateState(tick);
 });
 
-const initialAmount = new Amount(1000); // 1000 BRL
-const minProfit = new Amount(1001); // Pelo menos 1 BRL de lucro
+const initialAmount = new Amount(1000);
+const minProfit = new Amount(1001);
 
-let currentBalance = 0;
-let currentLatency = 0; // Medição real do Round-Trip Time
-let executedVolume = 0; // Volume real negociado pelo motor
+let realBalance = 0;
+let currentLatency = 0;
+let executedVolume = 0;
 
 balanceFetcher.fetchBrlBalance().then(amt => {
-    amt.apply((val) => { currentBalance = val; });
+    amt.apply((val) => { realBalance = val; });
 });
 
 setInterval(async () => {
     try {
         const pingStart = Date.now();
         const amt = await balanceFetcher.fetchBrlBalance();
-        currentLatency = Date.now() - pingStart; // Calcula o ping real até o data center da Binance
+        currentLatency = Date.now() - pingStart;
         
-        amt.apply((val) => { currentBalance = val; });
+        amt.apply((val) => { realBalance = val; });
     } catch (err) {}
 }, 5000);
 
 console.log("✅ Initialization Complete.");
 console.log("📡 Listening for market data and evaluating Arbitrage Cycles...");
 
-// 5. WebSocket Server for Dashboard
 let currentBasePrice = 45200.50;
 let currentPnl = 1250.00;
 let currentVolume = 1450200;
@@ -99,7 +123,33 @@ const server = Bun.serve({
     return new Response("HFT Engine WebSocket API");
   },
   websocket: {
-    message(ws, message) {},
+    message(ws, message) {
+        try {
+            const data = JSON.parse(message.toString());
+            
+            if (data.type === "SET_MODE") {
+                currentMode = data.mode === "LIVE" ? TradingMode.LIVE : TradingMode.SIMULATION;
+                console.log(`Switched trading mode to ${data.mode}`);
+            } else if (data.type === "SET_SIM_BALANCE") {
+                virtualBalanceManager = new VirtualBalanceManager(new Amount(parseFloat(data.amount)));
+                simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo);
+                console.log(`Reset simulation balance to ${data.amount}`);
+            } else if (data.type === "GET_STATUS") {
+                let modeStr = "";
+                currentMode.apply((m) => modeStr = m);
+                
+                virtualBalanceManager.applyAllBalances((simBalances) => {
+                    const simBrl = simBalances.get("BRL") || 0;
+                    ws.send(JSON.stringify({
+                        type: "STATUS",
+                        mode: modeStr,
+                        simBalance: simBrl,
+                        realBalance: realBalance
+                    }));
+                });
+            }
+        } catch(e) {}
+    },
     open(ws) {
       ws.subscribe("dashboard");
       console.log("🖥️ Dashboard connected.");
@@ -112,29 +162,50 @@ const server = Bun.serve({
 
 console.log(`🌐 WebSocket Server for Dashboard running on ws://localhost:${server.port}`);
 
-// Simulate market loop triggering evaluateAndExecute
 setInterval(async () => {
     try {
-        // Math engine execution
-        const profitAmount = await arbitrageCycle.evaluateAndExecute(
-            triangularPairs,
-            feeFetcher,
-            mathEngine,
-            initialAmount,
-            minProfit
-        );
+        let bestProfitAmount = new Amount(-9999999);
+        let bestRealProfit = -9999999;
 
-        let realProfit = 0;
-        profitAmount.apply((val) => { realProfit = val; });
+        for (const triangle of activeTriangles) {
+            const profitAmount = await arbitrageCycle.evaluateAndExecute(
+                triangle,
+                feeFetcher,
+                mathEngine,
+                initialAmount,
+                minProfit
+            );
 
-        // Update Dashboard Stats
-        server.publish("dashboard", JSON.stringify({
-          type: "UPDATE",
-          pnl: realProfit,
-          balance: currentBalance,
-          latency: currentLatency,
-          volume: executedVolume // Será 0 até ativarmos o OrderExecutor
-        }));
+            let realProfit = 0;
+            profitAmount.apply((val) => { realProfit = val; });
+
+            if (realProfit > bestRealProfit) {
+                bestRealProfit = realProfit;
+                bestProfitAmount = profitAmount;
+            }
+        }
+
+        if (bestRealProfit > -999999) {
+            let modeStr = "";
+            currentMode.apply((m) => modeStr = m);
+
+            let simBrl = 0;
+            if (currentMode.isSimulation()) {
+                virtualBalanceManager.applyAllBalances((simBalances) => {
+                    simBrl = simBalances.get("BRL") || 0;
+                });
+            }
+
+            server.publish("dashboard", JSON.stringify({
+              type: "UPDATE",
+              mode: modeStr,
+              pnl: bestRealProfit,
+              simBalance: simBrl,
+              realBalance: realBalance,
+              latency: currentLatency,
+              volume: executedVolume
+            }));
+        }
     } catch (err) {
         console.error("Loop error:", err);
     }

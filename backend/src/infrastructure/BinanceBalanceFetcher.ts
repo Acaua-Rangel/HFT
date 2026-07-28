@@ -2,13 +2,21 @@ import { Amount } from "../domain/valueObjects/Amount";
 import * as crypto from "crypto";
 
 export class BinanceBalanceFetcher {
-  private readonly key: string = process.env.BINANCE_API_KEY || "";
-  private readonly secret: string = process.env.BINANCE_API_SECRET || "";
+  private readonly key: string = (process.env.BINANCE_API_KEY || "").replace(/^["']|["']$/g, "").trim();
+  private readonly secret: string = (process.env.BINANCE_API_SECRET || "").replace(/^["']|["']$/g, "").trim();
+  private readonly hasKeys: boolean;
+  private hasLoggedWarning = false;
+
+  constructor() {
+    this.hasKeys = this.key.length > 0 && this.secret.length > 0;
+    if (!this.hasKeys) {
+      console.warn("⚠️ Binance API Keys missing. Balance will show R$ 0.00.");
+    }
+  }
 
   public async fetchBrlBalance(): Promise<Amount> {
-    const hasKeys = this.key.length > 0 && this.secret.length > 0;
-    if (!hasKeys) {
-      console.warn("⚠️ Binance API Keys missing. Cannot fetch real balance.");
+    if (!this.hasKeys) {
+      // Don't log repeatedly — the constructor already warned once
       return new Amount(0);
     }
 
@@ -25,10 +33,14 @@ export class BinanceBalanceFetcher {
 
       const isOk = response.ok === true;
       if (!isOk) {
-        console.error(`❌ HTTP Error when fetching balance: ${response.status}`);
+        if (!this.hasLoggedWarning) {
+          console.error(`❌ HTTP Error when fetching balance: ${response.status}`);
+          this.hasLoggedWarning = true;
+        }
         return new Amount(0);
       }
 
+      this.hasLoggedWarning = false; // Reset on success
       const data = await response.json();
       const brlBalance = data.balances.find((b: any) => b.asset === "BRL");
       
@@ -39,7 +51,10 @@ export class BinanceBalanceFetcher {
       }
       return new Amount(0);
     } catch (e) {
-      console.error("❌ Failed to fetch balance from Binance API", e);
+      if (!this.hasLoggedWarning) {
+        console.error("❌ Failed to fetch balance from Binance API", e);
+        this.hasLoggedWarning = true;
+      }
       return new Amount(0);
     }
   }

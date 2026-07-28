@@ -4,11 +4,13 @@ import { OrderBook } from "../entities/OrderBook";
 
 export interface MathEngine {
   calculateArbitrageProfit(
-    initialAmount: Amount,
-    firstOrderBook: OrderBook,
-    secondOrderBook: OrderBook,
-    thirdOrderBook: OrderBook,
-    fee: Fee
+    initialBrl: Amount,
+    btcBrlBook: OrderBook,
+    ethBtcBook: OrderBook,
+    ethBrlBook: OrderBook,
+    fee1: Fee,
+    fee2: Fee,
+    fee3: Fee
   ): Amount;
 
   isProfitable(profit: Amount, minimumExpected: Amount): boolean;

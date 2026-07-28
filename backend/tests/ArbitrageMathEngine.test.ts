@@ -33,7 +33,15 @@ describe("ArbitrageMathEngine", () => {
     // Final BRL: 1196.4036 BRL
     // Profit: 1196.4036 - 1000 = 196.4036 BRL
 
-    const profit = engine.calculateArbitrageProfit(initialBrl, btcBrlBook, ethBtcBook, ethBrlBook, fee);
+    const profit = engine.calculateArbitrageProfit(
+      initialBrl,
+      btcBrlBook,
+      ethBtcBook,
+      ethBrlBook,
+      fee,
+      fee,
+      fee
+    );
     
     // We expect a profit around 196.40 (accounting for precision)
     expect((profit as any).value).toBeCloseTo(196.40, 2);

@@ -5,14 +5,20 @@ import type { Pair } from "../domain/valueObjects/Pair";
 import * as crypto from "crypto";
 
 class ApiCredentials {
+  private readonly hasKeys: boolean;
+
   constructor(
-    private readonly key: string = process.env.BINANCE_API_KEY || "",
-    private readonly secret: string = process.env.BINANCE_API_SECRET || ""
+    private readonly key: string = (process.env.BINANCE_API_KEY || "").replace(/^["']|["']$/g, "").trim(),
+    private readonly secret: string = (process.env.BINANCE_API_SECRET || "").replace(/^["']|["']$/g, "").trim()
   ) {
-    const hasKeys = this.key.length > 0 && this.secret.length > 0;
-    if (!hasKeys) {
-      console.warn("⚠️ Binance API Key/Secret missing. Fee fetching will fallback to default 0.1%.");
+    this.hasKeys = this.key.length > 0 && this.secret.length > 0;
+    if (!this.hasKeys) {
+      console.warn("⚠️ Binance API Key/Secret missing. All fees will use default 0.1%.");
     }
+  }
+
+  public isConfigured(): boolean {
+    return this.hasKeys;
   }
 
   public sign(queryString: string): string {
@@ -26,62 +32,82 @@ class ApiCredentials {
 
 class FeeCache {
   private readonly cache: Map<string, Fee> = new Map();
+  private readonly pending: Map<string, Promise<Fee>> = new Map();
 
-  public getAndApply(symbol: string, callback: (fee: Fee) => void): boolean {
-    const hasFee = this.cache.has(symbol);
-    if (hasFee) {
-      const fee = this.cache.get(symbol);
-      callback(fee!);
-      return true;
-    }
-    return false;
+  public get(symbol: string): Fee | undefined {
+    return this.cache.get(symbol);
   }
 
   public set(symbol: string, fee: Fee): void {
     this.cache.set(symbol, fee);
+    this.pending.delete(symbol);
+  }
+
+  public getPending(symbol: string): Promise<Fee> | undefined {
+    return this.pending.get(symbol);
+  }
+
+  public setPending(symbol: string, promise: Promise<Fee>): void {
+    this.pending.set(symbol, promise);
   }
 }
 
 export class BinanceFeeFetcher implements FeeFetcher {
   private readonly cache = new FeeCache();
   private readonly credentials = new ApiCredentials();
+  private readonly defaultFee = new Fee(new Amount(0.001));
 
   public async fetchFeeFor(pair: Pair): Promise<Fee> {
     return new Promise((resolve) => {
       pair.applyBinanceStreamFormat(async (streamName) => {
         const symbol = streamName.replace("@bookTicker", "").toUpperCase();
-        
-        const isCached = this.cache.getAndApply(symbol, (cachedFee) => {
-          resolve(cachedFee);
-        });
 
-        if (isCached) {
+        // 1. Check cache first
+        const cached = this.cache.get(symbol);
+        if (cached) {
+          resolve(cached);
           return;
         }
 
-        this.executeApiFetch(symbol, resolve);
+        // 2. If no API keys, use default immediately (no HTTP call)
+        if (!this.credentials.isConfigured()) {
+          this.cache.set(symbol, this.defaultFee);
+          resolve(this.defaultFee);
+          return;
+        }
+
+        // 3. Check if a fetch is already in-flight for this symbol
+        const pendingPromise = this.cache.getPending(symbol);
+        if (pendingPromise) {
+          const fee = await pendingPromise;
+          resolve(fee);
+          return;
+        }
+
+        // 4. Start a new fetch and register a safe promise
+        const fetchPromise = this.performHttpRequest(symbol)
+          .then((fee) => {
+            this.cache.set(symbol, fee);
+            return fee;
+          })
+          .catch(() => {
+            console.warn(`⚠️ Fee fetch failed for ${symbol}, using 0.1% fallback.`);
+            this.cache.set(symbol, this.defaultFee);
+            return this.defaultFee;
+          });
+
+        this.cache.setPending(symbol, fetchPromise);
+        const result = await fetchPromise;
+        resolve(result);
       });
     });
-  }
-
-  private async executeApiFetch(symbol: string, resolve: (fee: Fee) => void): Promise<void> {
-    try {
-      const fee = await this.performHttpRequest(symbol);
-      this.cache.set(symbol, fee);
-      resolve(fee);
-    } catch (e) {
-      console.error(`Error fetching fee for ${symbol}, fallback to 0.1%`);
-      const fallbackFee = new Fee(new Amount(0.001));
-      this.cache.set(symbol, fallbackFee);
-      resolve(fallbackFee);
-    }
   }
 
   private async performHttpRequest(symbol: string): Promise<Fee> {
     const timestamp = Date.now();
     const queryString = `symbol=${symbol}&timestamp=${timestamp}`;
     const signature = this.credentials.sign(queryString);
-    const url = `https://api.binance.com/api/v3/tradeFee?${queryString}&signature=${signature}`;
+    const url = `https://api.binance.com/sapi/v1/asset/tradeFee?${queryString}&signature=${signature}`;
 
     const response = await fetch(url, {
       method: "GET",
@@ -94,7 +120,12 @@ export class BinanceFeeFetcher implements FeeFetcher {
     }
 
     const data = await response.json();
-    const makerFee = parseFloat(data[0].makerCommission);
+    let makerFee = 0.001; // fallback default if array is empty
+    if (Array.isArray(data) && data.length > 0) {
+      makerFee = parseFloat(data[0].makerCommission);
+    } else if (data.makerCommission) {
+      makerFee = parseFloat(data.makerCommission);
+    }
     return new Fee(new Amount(makerFee));
   }
 }

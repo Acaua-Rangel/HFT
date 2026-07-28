@@ -13,4 +13,8 @@ export class TriangularPairs {
   public apply(callback: (first: Pair, second: Pair, third: Pair) => void): void {
     callback(this.pairTuple.first, this.pairTuple.second, this.third);
   }
+
+  public async applyAsync(callback: (first: Pair, second: Pair, third: Pair) => Promise<void>): Promise<void> {
+    await callback(this.pairTuple.first, this.pairTuple.second, this.third);
+  }
 }

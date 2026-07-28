@@ -1,54 +1,98 @@
 import { OrderExecutor } from "../domain/interfaces/OrderExecutor";
 import { Amount } from "../domain/valueObjects/Amount";
 import { Pair } from "../domain/valueObjects/Pair";
+import { OrderFill } from "../domain/valueObjects/OrderFill";
 import { ErrorLogRepository, ErrorLogEntry, ErrorType, ErrorMessage, StackTrace, ErrorContext } from "./database/ErrorLogRepository";
-import { LogId, Timestamp } from "./database/TransactionRepository";
+import { TransactionRepository, TransactionLogEntry, LogId, Timestamp, TradeId, AssetName, MonetaryValue, TradeStatus } from "./database/TransactionRepository";
+import { createHmac } from "crypto";
 
 export class BinanceOrderExecutor implements OrderExecutor {
-  constructor(private readonly errorLogger: ErrorLogRepository) {}
+  constructor(
+    private readonly errorLogger: ErrorLogRepository,
+    private readonly transactionRepo: TransactionRepository
+  ) {}
 
-  public executeMarketBuy(pair: Pair, amount: Amount): void {
-    this.sendRestRequest("BUY", pair, amount);
+  public async executeMarketBuy(pair: Pair, amount: Amount): Promise<OrderFill> {
+    return this.sendRestRequest("BUY", pair, amount);
   }
 
-  public executeMarketSell(pair: Pair, amount: Amount): void {
-    this.sendRestRequest("SELL", pair, amount);
+  public async executeMarketSell(pair: Pair, amount: Amount): Promise<OrderFill> {
+    return this.sendRestRequest("SELL", pair, amount);
   }
 
-  public executeMarketSellWithTimeout(pair: Pair, amount: Amount, timeoutMs: number): void {
-    const timeoutId = setTimeout(() => {
-      this.handleBrokenLegProtection(pair, amount, "Timeout");
-    }, timeoutMs);
+  private async sendRestRequest(side: string, pair: Pair, amount: Amount): Promise<OrderFill> {
+    let symbol = "";
+    pair.applyBinanceSymbol((sym) => { symbol = sym; });
 
-    this.sendRestRequest("SELL", pair, amount)
-      .then(() => clearTimeout(timeoutId))
-      .catch((err) => {
-        clearTimeout(timeoutId);
-        this.handleBrokenLegProtection(pair, amount, "Error: " + String(err));
-      });
-  }
+    let amountVal = 0;
+    amount.apply((val) => { amountVal = val; });
 
-  private async sendRestRequest(side: string, pair: Pair, amount: Amount): Promise<void> {
-    // Mock REST request to Binance
-    console.log(`Executing ${side} for ${(amount as any).value} on ${(pair as any).base.symbol}-${(pair as any).quote.symbol}`);
-    // Simulate real delay, let's keep it simple for tests. We can simulate failure if pair has a specific quote
-    if (side === "SELL" && (pair as any).base.symbol === "ETH" && (pair as any).quote.symbol === "BRL") {
-        return new Promise((_, reject) => setTimeout(() => reject("Simulated API failure or timeout"), 50));
+    const apiKey = process.env.BINANCE_API_KEY || "";
+    const apiSecret = process.env.BINANCE_API_SECRET || "";
+
+    const timestamp = Date.now();
+    let queryString = `symbol=${symbol}&side=${side}&type=MARKET&timestamp=${timestamp}`;
+
+    if (side === "BUY") {
+      queryString += `&quoteOrderQty=${amountVal}`;
+    } else {
+      queryString += `&quantity=${amountVal}`;
     }
-    return Promise.resolve();
+
+    const signature = createHmac("sha256", apiSecret).update(queryString).digest("hex");
+    const url = `https://api.binance.com/api/v3/order?${queryString}&signature=${signature}`;
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "X-MBX-APIKEY": apiKey,
+        },
+      });
+
+      if (!response.ok) {
+        return OrderFill.failed();
+      }
+
+      const data: any = await response.json();
+      
+      const executedQty = new Amount(parseFloat(data.executedQty || "0"));
+      const cummulativeQuoteQty = new Amount(parseFloat(data.cummulativeQuoteQty || "0"));
+      
+      let averagePriceVal = 0;
+      cummulativeQuoteQty.apply((c) => {
+        executedQty.apply((e) => {
+          if (e > 0) averagePriceVal = c / e;
+        });
+      });
+      const averagePrice = new Amount(averagePriceVal);
+
+      const fill = new OrderFill(executedQty, cummulativeQuoteQty, averagePrice, true);
+
+      this.logTrade(symbol, executedQty, averagePrice, "EXECUTED");
+
+      return fill;
+    } catch (err) {
+      return OrderFill.failed();
+    }
   }
 
-  private handleBrokenLegProtection(pair: Pair, amount: Amount, reason: string): void {
-    console.log(`[PROTECTION] ${reason}. Canceling/reverting order for ${(pair as any).base.symbol}-${(pair as any).quote.symbol}`);
-    
-    const entry = new ErrorLogEntry(
-        new LogId(crypto.randomUUID()),
-        new Timestamp(Date.now()),
-        new ErrorType("BROKEN_LEG"),
-        new ErrorMessage(`Protection triggered for ${(pair as any).base.symbol}-${(pair as any).quote.symbol}: ${reason}`),
-        new StackTrace(null),
-        new ErrorContext(JSON.stringify({ amount: (amount as any).value }))
+  private logTrade(symbol: string, quantity: Amount, price: Amount, status: string): void {
+    let rawQty = 0;
+    let rawPrice = 0;
+    quantity.apply((val) => rawQty = val);
+    price.apply((val) => rawPrice = val);
+
+    const entry = new TransactionLogEntry(
+      new LogId(crypto.randomUUID()),
+      new Timestamp(Date.now()),
+      new TradeId(crypto.randomUUID()),
+      new AssetName(symbol),
+      new MonetaryValue(rawQty),
+      new MonetaryValue(rawPrice),
+      new MonetaryValue(0),
+      new TradeStatus(status)
     );
-    this.errorLogger.save(entry);
+    this.transactionRepo.save(entry);
   }
 }

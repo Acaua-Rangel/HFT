@@ -62,20 +62,29 @@ function App() {
   const [balance, setBalance] = useState<number | null>(null);
   const [pnlFlash, setPnlFlash] = useState<'flash-up' | 'flash-down' | ''>('');
   
+  const [tradingMode, setTradingMode] = useState<"SIMULATION" | "LIVE">("SIMULATION");
+  const [simBalance, setSimBalance] = useState<number | null>(null);
+  const [showLiveModal, setShowLiveModal] = useState(false);
+  const [liveConfirmInput, setLiveConfirmInput] = useState("");
+  const [isEditingSimBalance, setIsEditingSimBalance] = useState(false);
+  const [simBalanceInput, setSimBalanceInput] = useState("");
+
   const pnlRef = useRef(pnl);
+  const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
     let ws: WebSocket;
 
     if (isRunning) {
       ws = new WebSocket('ws://localhost:3000');
+      wsRef.current = ws;
       
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
           
           if (data.type === 'UPDATE') {
-            if (data.pnl) {
+            if (data.pnl !== undefined) {
               const newPnl = data.pnl;
               if (pnlRef.current !== null) {
                 if (newPnl > pnlRef.current) setPnlFlash('flash-up');
@@ -95,16 +104,20 @@ function App() {
             if (data.latency) setLatency(data.latency);
             if (data.volume) setVolume(v => v + data.volume);
             if (data.balance !== undefined) setBalance(data.balance);
+            if (data.mode !== undefined) setTradingMode(data.mode);
+            if (data.simBalance !== undefined) setSimBalance(data.simBalance);
           }
         } catch (e) {
           console.error("Invalid WS message");
         }
       };
+      
+      ws.onclose = () => { wsRef.current = null; };
     }
 
     let binanceWs: WebSocket;
     if (isRunning) {
-      binanceWs = new WebSocket('wss://stream.binance.com:9443/ws/btcbrl@depth20@100ms');
+      binanceWs = new WebSocket('wss://stream.binance.com:9443/ws/pepebrl@depth20@100ms');
       binanceWs.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -140,8 +153,61 @@ function App() {
     orderbook.bids[orderbook.bids.length - 1]?.total || 1
   );
 
+  const handleToggleMode = (mode: "SIMULATION" | "LIVE") => {
+    if (mode === "LIVE" && tradingMode === "SIMULATION") {
+      setShowLiveModal(true);
+      setLiveConfirmInput("");
+    } else if (mode === "SIMULATION" && tradingMode === "LIVE") {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "SET_MODE", mode: "SIMULATION" }));
+      }
+    }
+  };
+
+  const confirmLiveMode = () => {
+    if (liveConfirmInput === "CONFIRMAR") {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "SET_MODE", mode: "LIVE" }));
+      }
+      setShowLiveModal(false);
+    }
+  };
+
+  const handleSimBalanceSubmit = () => {
+    const amount = parseFloat(simBalanceInput);
+    if (!isNaN(amount) && wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "SET_SIM_BALANCE", amount }));
+    }
+    setIsEditingSimBalance(false);
+  };
+
   return (
-    <div className="app-container">
+    <div className={`app-container ${tradingMode === 'LIVE' ? 'live-mode' : ''}`}>
+      {showLiveModal && (
+        <div className="confirmation-modal-overlay">
+          <div className="confirmation-modal-content">
+            <h2>⚠️ Ativar Modo LIVE</h2>
+            <p>Você está prestes a ativar o modo de trading real. Ordens reais serão executadas com dinheiro da sua conta Binance.</p>
+            <input 
+              type="text" 
+              placeholder="Digite CONFIRMAR para ativar" 
+              value={liveConfirmInput}
+              onChange={(e) => setLiveConfirmInput(e.target.value)}
+            />
+            <div className="modal-buttons">
+              <button className="btn btn-ghost" onClick={() => setShowLiveModal(false)}>Cancelar</button>
+              <button 
+                className="btn btn-danger" 
+                disabled={liveConfirmInput !== "CONFIRMAR"}
+                onClick={confirmLiveMode}
+              >
+                Ativar LIVE
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="header">
         <div className="header-title">
           <h1>Nexus HFT Engine</h1>
@@ -149,8 +215,25 @@ function App() {
             <div className="status-dot"></div>
             {isRunning ? 'System Active' : 'System Halted'}
           </div>
+          <div className={`mode-badge ${tradingMode.toLowerCase()}`}>
+            {tradingMode === 'SIMULATION' ? 'PAPER TRADING' : 'LIVE TRADING'}
+          </div>
         </div>
         <div className="controls">
+          <div className="mode-toggle">
+            <div 
+              className={`mode-toggle-option ${tradingMode === 'SIMULATION' ? 'active sim' : ''}`}
+              onClick={() => handleToggleMode("SIMULATION")}
+            >
+              📊 SIMULATION
+            </div>
+            <div 
+              className={`mode-toggle-option ${tradingMode === 'LIVE' ? 'active live' : ''}`}
+              onClick={() => handleToggleMode("LIVE")}
+            >
+              ⚡ LIVE
+            </div>
+          </div>
           {!isRunning ? (
             <button className="btn btn-start" onClick={() => setIsRunning(true)}>
               INITIATE ENGINE
@@ -165,15 +248,43 @@ function App() {
 
       <div className="metrics-row">
         <div className="glass-panel metric-card">
-          <div className="panel-title">Margem Teórica (Ciclo)</div>
+          <div className="panel-title">Melhor Margem HFT (Multi-Cycle)</div>
           <div className={`metric-value ${pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : ''} ${pnlFlash}`}>
             {pnl !== null ? `${pnl >= 0 ? '+' : ''}${formatCurrency(pnl)}` : '--'}
           </div>
         </div>
         <div className="glass-panel metric-card">
-          <div className="panel-title">BRL Balance (Live)</div>
-          <div className="metric-value positive">
-            {balance !== null ? `R$ ${balance.toFixed(2)}` : '--'}
+          <div className="panel-title">
+            {tradingMode === 'SIMULATION' ? 'BRL Balance (Simulated)' : 'BRL Balance (Live)'}
+            {tradingMode === 'SIMULATION' && (
+              <span className="edit-sim-balance" onClick={() => {
+                setIsEditingSimBalance(!isEditingSimBalance);
+                if (!isEditingSimBalance) setSimBalanceInput(simBalance?.toString() || "");
+              }}>
+                ✏️
+              </span>
+            )}
+          </div>
+          <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
+            {tradingMode === 'SIMULATION' ? (
+              isEditingSimBalance ? (
+                <div className="sim-balance-edit-container">
+                  <input 
+                    type="number" 
+                    className="sim-balance-edit"
+                    value={simBalanceInput} 
+                    onChange={e => setSimBalanceInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSimBalanceSubmit()}
+                    autoFocus
+                  />
+                  <span className="sim-balance-confirm" onClick={handleSimBalanceSubmit}>✔️</span>
+                </div>
+              ) : (
+                simBalance !== null ? `R$ ${simBalance.toFixed(2)}` : '--'
+              )
+            ) : (
+              balance !== null ? `R$ ${balance.toFixed(2)}` : '--'
+            )}
           </div>
         </div>
         <div className="glass-panel metric-card">
@@ -192,7 +303,7 @@ function App() {
 
       <div className="dashboard-grid">
         <div className="glass-panel orderbook-panel">
-          <div className="panel-title">Live Orderbook (BTC/BRL)</div>
+          <div className="panel-title">Live Orderbook (PEPE/BRL)</div>
           <div className="orderbook-container">
             <table className="orderbook-table">
               <thead>
