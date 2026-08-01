@@ -17,6 +17,10 @@ export class CycleExecutor {
     let finalFill = OrderFill.failed();
     const executor = this.executorProvider();
 
+    if (!executor.canExecuteBatch(3)) {
+      return OrderFill.failed();
+    }
+
     await pairs.applyAsync(async (first: Pair, second: Pair, third: Pair) => {
       try {
         const fill1 = await this.executeWithTimeout(() => executor.executeMarketBuy(first, initialAmount), 5000);

@@ -13,9 +13,9 @@ describe("ArbitrageMathEngine", () => {
     const initialBrl = new Amount(1000);
     const fee = new Fee(new Amount(0.001)); // 0.1%
 
-    const btcBrlBook = new OrderBook().add(new Tick(new Pair(new Currency("BTC"), new Currency("BRL")), new Amount(100000)));
-    const ethBtcBook = new OrderBook().add(new Tick(new Pair(new Currency("ETH"), new Currency("BTC")), new Amount(0.05)));
-    const ethBrlBook = new OrderBook().add(new Tick(new Pair(new Currency("ETH"), new Currency("BRL")), new Amount(6000)));
+    const btcBrlBook = new OrderBook(); btcBrlBook.add(new Tick(new Pair(new Currency("BTC"), new Currency("BRL")), new Amount(100000)));
+    const ethBtcBook = new OrderBook(); ethBtcBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BTC")), new Amount(0.05)));
+    const ethBrlBook = new OrderBook(); ethBrlBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BRL")), new Amount(6000)));
 
     // 1. Buy BTC with BRL
     // 1000 / 100000 = 0.01 BTC
@@ -56,7 +56,7 @@ describe("ArbitrageMathEngine", () => {
     const ethBtcBook = new OrderBook();
     const ethBrlBook = new OrderBook();
 
-    const profit = engine.calculateArbitrageProfit(initialBrl, btcBrlBook, ethBtcBook, ethBrlBook, fee);
-    expect((profit as any).value).toBe(0);
+    const profit = engine.calculateArbitrageProfit(initialBrl, btcBrlBook, ethBtcBook, ethBrlBook, fee, fee, fee);
+    expect((profit as any).value).toBe(-9999999);
   });
 });

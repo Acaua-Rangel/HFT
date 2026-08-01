@@ -17,6 +17,9 @@ import { BinanceBalanceFetcher } from "./src/infrastructure/BinanceBalanceFetche
 import { VirtualBalanceManager } from "./src/infrastructure/VirtualBalanceManager";
 import { SimulatedOrderExecutor } from "./src/infrastructure/SimulatedOrderExecutor";
 import { TradingMode } from "./src/domain/valueObjects/TradingMode";
+import { ExecutionLock } from "./src/application/ExecutionLock";
+import { BinanceWsClient } from "./src/infrastructure/BinanceWsClient";
+
 
 console.log("🚀 Starting HFT Triangular Arbitrage Engine...");
 
@@ -37,10 +40,16 @@ const errorRepo = new ErrorLogRepository(asyncWriter);
 const stateManager = new LocalStateManager();
 const mathEngine = new ArbitrageMathEngine();
 const ingestor = new BinancePriceIngestor();
-const balanceFetcher = new BinanceBalanceFetcher();
+
+const apiKey = process.env.BINANCE_API_KEY || "";
+const apiSecret = process.env.BINANCE_API_SECRET || "";
+const globalWsClient = new BinanceWsClient(apiKey, apiSecret);
+globalWsClient.connect().catch(console.error);
+
+const balanceFetcher = new BinanceBalanceFetcher(globalWsClient);
 const feeFetcher = new BinanceFeeFetcher();
 
-const binanceExecutor = new BinanceOrderExecutor(errorRepo, transactionRepo);
+const binanceExecutor = new BinanceOrderExecutor(globalWsClient, errorRepo, transactionRepo);
 let simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo);
 
 const getExecutor = () => {
@@ -86,8 +95,42 @@ activeTriangles.forEach(t => {
     });
 });
 
-ingestor.onTick((tick) => {
+const evaluationLock = new ExecutionLock();
+
+ingestor.onTick(async (tick) => {
     stateManager.updateState(tick);
+
+    await evaluationLock.runIfUnlocked(async () => {
+        try {
+            let bestProfitAmount = new Amount(-9999999);
+            let bestRealProfit = -9999999;
+
+            for (const triangle of activeTriangles) {
+                const profitAmount = await arbitrageCycle.evaluateAndExecute(
+                    triangle,
+                    feeFetcher,
+                    mathEngine,
+                    initialAmount,
+                    minProfit,
+                    bnbDiscountEnabled
+                );
+
+                let realProfit = 0;
+                profitAmount.apply((val) => { realProfit = val; });
+
+                if (realProfit > bestRealProfit) {
+                    bestRealProfit = realProfit;
+                    bestProfitAmount = profitAmount;
+                }
+            }
+
+            if (bestRealProfit > -999999) {
+                latestPnl = bestRealProfit;
+            }
+        } catch (err) {
+            console.error("Evaluation error:", err);
+        }
+    });
 });
 
 const initialAmount = new Amount(1000);
@@ -96,6 +139,7 @@ const minProfit = new Amount(1001);
 let realBalance = 0;
 let currentLatency = 0;
 let executedVolume = 0;
+let latestPnl = 0;
 
 balanceFetcher.fetchBrlBalance().then(amt => {
     amt.apply((val) => { realBalance = val; });
@@ -169,53 +213,26 @@ const server = Bun.serve({
 
 console.log(`🌐 WebSocket Server for Dashboard running on ws://localhost:${server.port}`);
 
-setInterval(async () => {
-    try {
-        let bestProfitAmount = new Amount(-9999999);
-        let bestRealProfit = -9999999;
+// Telemetry loop: Publishes state to frontend 4 times per second
+setInterval(() => {
+    let modeStr = "";
+    currentMode.apply((m) => modeStr = m);
 
-        for (const triangle of activeTriangles) {
-            const profitAmount = await arbitrageCycle.evaluateAndExecute(
-                triangle,
-                feeFetcher,
-                mathEngine,
-                initialAmount,
-                minProfit,
-                bnbDiscountEnabled
-            );
-
-            let realProfit = 0;
-            profitAmount.apply((val) => { realProfit = val; });
-
-            if (realProfit > bestRealProfit) {
-                bestRealProfit = realProfit;
-                bestProfitAmount = profitAmount;
-            }
-        }
-
-        if (bestRealProfit > -999999) {
-            let modeStr = "";
-            currentMode.apply((m) => modeStr = m);
-
-            let simBrl = 0;
-            if (currentMode.isSimulation()) {
-                virtualBalanceManager.applyAllBalances((simBalances) => {
-                    simBrl = simBalances.get("BRL") || 0;
-                });
-            }
-
-            server.publish("dashboard", JSON.stringify({
-              type: "UPDATE",
-              mode: modeStr,
-              pnl: bestRealProfit,
-              simBalance: simBrl,
-              realBalance: realBalance,
-              latency: currentLatency,
-              volume: executedVolume,
-              bnbDiscount: bnbDiscountEnabled
-            }));
-        }
-    } catch (err) {
-        console.error("Loop error:", err);
+    let simBrl = 0;
+    if (currentMode.isSimulation()) {
+        virtualBalanceManager.applyAllBalances((simBalances) => {
+            simBrl = simBalances.get("BRL") || 0;
+        });
     }
-}, 250);
+
+    server.publish("dashboard", JSON.stringify({
+      type: "UPDATE",
+      mode: modeStr,
+      pnl: latestPnl,
+      simBalance: simBrl,
+      realBalance: realBalance,
+      latency: currentLatency,
+      volume: executedVolume,
+      bnbDiscount: bnbDiscountEnabled
+    }));
+}, 50);

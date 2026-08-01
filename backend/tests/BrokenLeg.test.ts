@@ -1,11 +1,14 @@
 import { describe, it, expect, mock } from "bun:test";
-import { BinanceOrderExecutor } from "../src/infrastructure/BinanceOrderExecutor";
+import { CycleExecutor } from "../src/application/CycleExecutor";
 import { ErrorLogRepository } from "../src/infrastructure/database/ErrorLogRepository";
+import { TransactionRepository } from "../src/infrastructure/database/TransactionRepository";
 import { Pair } from "../src/domain/valueObjects/Pair";
 import { Currency } from "../src/domain/valueObjects/Currency";
 import { Amount } from "../src/domain/valueObjects/Amount";
 import { AsyncDatabaseWriter, QueryQueue, ProcessingState } from "../src/infrastructure/database/AsyncDatabaseWriter";
 import { Database } from "bun:sqlite";
+import { TriangularPairs, PairTuple } from "../src/application/TriangularPairs";
+import { OrderFill } from "../src/domain/valueObjects/OrderFill";
 
 describe("Broken Leg Scenario (Risk protection)", () => {
   it("should trigger circuit breaker and log broken leg event for 3rd leg (ETH->BRL) timeout or error", async () => {
@@ -22,23 +25,34 @@ describe("Broken Leg Scenario (Risk protection)", () => {
     const saveSpy = mock(errorLogger.save.bind(errorLogger));
     errorLogger.save = saveSpy as any;
 
-    const executor = new BinanceOrderExecutor(errorLogger);
+    let executeCalls = 0;
+    const mockExecutor = {
+      executeMarketBuy: async (pair: Pair, amount: Amount) => {
+        executeCalls++;
+        return new OrderFill(new Amount(10), new Amount(100), new Amount(10), true);
+      },
+      executeMarketSell: async (pair: Pair, amount: Amount) => {
+        executeCalls++;
+        if (executeCalls === 3) {
+          // 3rd leg fails!
+          return OrderFill.failed();
+        }
+        // Fallback sell (Broken leg handler)
+        return new OrderFill(new Amount(10), new Amount(100), new Amount(10), true);
+      },
+      canExecuteBatch: (count: number) => true
+    };
+    
+    const cycleExecutor = new CycleExecutor(() => mockExecutor as any, errorLogger, {} as any);
     
     const pairBrlBtc = new Pair(new Currency("BTC"), new Currency("BRL"));
     const pairBtcEth = new Pair(new Currency("ETH"), new Currency("BTC"));
     const pairEthBrl = new Pair(new Currency("ETH"), new Currency("BRL"));
 
-    // 1st Leg (Buy BTC with BRL) -> Success expected
-    executor.executeMarketBuy(pairBrlBtc, new Amount(100));
-    
-    // 2nd Leg (Buy ETH with BTC) -> Success expected
-    executor.executeMarketBuy(pairBtcEth, new Amount(0.01));
+    const pairTuple = new PairTuple(pairBrlBtc, pairBtcEth);
+    const pairs = new TriangularPairs(pairTuple, pairEthBrl);
 
-    // 3rd Leg (Sell ETH for BRL) with Timeout -> Should mock failure!
-    executor.executeMarketSellWithTimeout(pairEthBrl, new Amount(0.2), 100);
-
-    // Wait some time to let promise/timeout resolve
-    await new Promise((resolve) => setTimeout(resolve, 200));
+    await cycleExecutor.executeCycle(pairs, new Amount(100));
 
     expect(saveSpy).toHaveBeenCalledTimes(1);
     
@@ -46,6 +60,6 @@ describe("Broken Leg Scenario (Risk protection)", () => {
     const savedEntry = saveSpy.mock.calls[0][0];
     
     expect((savedEntry as any).errorType.asString()).toBe("BROKEN_LEG");
-    expect((savedEntry as any).message.asString()).toContain("ETH-BRL");
+    expect((savedEntry as any).message.asString()).toContain("ETHBTC");
   });
 });

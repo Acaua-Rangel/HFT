@@ -22,4 +22,8 @@ export class Tick {
   public convertSell(baseAmount: Amount): Amount {
     return baseAmount.multiplyBy(this.price);
   }
+
+  public applyBinanceSymbol(callback: (symbol: string) => void): void {
+    this.pair.applyBinanceSymbol(callback);
+  }
 }

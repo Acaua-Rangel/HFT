@@ -45,6 +45,14 @@ export class SimulatedOrderExecutor implements OrderExecutor {
   }
 
   public async executeMarketSell(pair: Pair, amount: Amount): Promise<OrderFill> {
+    return this.simulateTrade("SELL", pair, amount);
+  }
+
+  public canExecuteBatch(count: number): boolean {
+    return true; // Simulation has no rate limits
+  }
+
+  private async simulateTrade(side: string, pair: Pair, amount: Amount): Promise<OrderFill> {
     const book = this.stateManager.retrieveOrderBook(pair);
     const latestTick = book.getLatest();
     

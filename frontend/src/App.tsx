@@ -98,7 +98,7 @@ function App() {
               pnlRef.current = newPnl;
               setPnlHistory(prev => {
                 const newHistory = [...prev, newPnl];
-                if (newHistory.length > 50) newHistory.shift();
+                if (newHistory.length > 200) newHistory.shift();
                 return newHistory;
               });
               setTimeout(() => setPnlFlash(''), 300);
