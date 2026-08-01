@@ -36,7 +36,7 @@ const PnlChart = ({ data }: { data: number[] }) => {
   }).join(' ');
 
   return (
-    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', marginTop: '40px', boxSizing: 'border-box' }}>
+    <svg viewBox="0 -5 100 110" preserveAspectRatio="none" style={{ width: '100%', height: 'calc(100% - 40px)', marginTop: '40px', boxSizing: 'border-box', overflow: 'visible' }}>
       <polyline
         fill="none"
         stroke="#10b981"
@@ -68,21 +68,25 @@ function App() {
   const [liveConfirmInput, setLiveConfirmInput] = useState("");
   const [isEditingSimBalance, setIsEditingSimBalance] = useState(false);
   const [simBalanceInput, setSimBalanceInput] = useState("");
+  const [bnbDiscount, setBnbDiscount] = useState(false);
 
   const pnlRef = useRef(pnl);
   const wsRef = useRef<WebSocket | null>(null);
+  const bnbDiscountRef = useRef(bnbDiscount);
 
   useEffect(() => {
-    let ws: WebSocket;
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let isMounted = true;
 
-    if (isRunning) {
+    const connect = () => {
+      if (!isMounted) return;
       ws = new WebSocket('ws://localhost:3000');
       wsRef.current = ws;
-      
+
       ws.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
-          
           if (data.type === 'UPDATE') {
             if (data.pnl !== undefined) {
               const newPnl = data.pnl;
@@ -90,7 +94,6 @@ function App() {
                 if (newPnl > pnlRef.current) setPnlFlash('flash-up');
                 else if (newPnl < pnlRef.current) setPnlFlash('flash-down');
               }
-              
               setPnl(newPnl);
               pnlRef.current = newPnl;
               setPnlHistory(prev => {
@@ -98,7 +101,6 @@ function App() {
                 if (newHistory.length > 50) newHistory.shift();
                 return newHistory;
               });
-              
               setTimeout(() => setPnlFlash(''), 300);
             }
             if (data.latency) setLatency(data.latency);
@@ -106,15 +108,48 @@ function App() {
             if (data.balance !== undefined) setBalance(data.balance);
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
+          } else if (data.type === 'STATUS') {
+            if (data.mode !== undefined) setTradingMode(data.mode);
+            if (data.simBalance !== undefined) setSimBalance(data.simBalance);
+            if (data.realBalance !== undefined) setBalance(data.realBalance);
+            if (data.bnbDiscount !== undefined) {
+              setBnbDiscount(data.bnbDiscount);
+              bnbDiscountRef.current = data.bnbDiscount;
+            }
           }
         } catch (e) {
           console.error("Invalid WS message");
         }
       };
-      
-      ws.onclose = () => { wsRef.current = null; };
-    }
 
+      ws.onopen = () => {
+        ws?.send(JSON.stringify({ type: "GET_STATUS" }));
+      };
+
+      ws.onclose = () => {
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+        }
+        if (isMounted) {
+          reconnectTimer = setTimeout(connect, 2000);
+        }
+      };
+
+      ws.onerror = () => {
+        ws?.close();
+      };
+    };
+
+    connect();
+
+    return () => {
+      isMounted = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      ws?.close();
+    };
+  }, []);
+
+  useEffect(() => {
     let binanceWs: WebSocket;
     if (isRunning) {
       binanceWs = new WebSocket('wss://stream.binance.com:9443/ws/pepebrl@depth20@100ms');
@@ -143,7 +178,6 @@ function App() {
     }
 
     return () => {
-      if (ws) ws.close();
       if (binanceWs) binanceWs.close();
     };
   }, [isRunning]);
@@ -158,6 +192,7 @@ function App() {
       setShowLiveModal(true);
       setLiveConfirmInput("");
     } else if (mode === "SIMULATION" && tradingMode === "LIVE") {
+      setTradingMode("SIMULATION");
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "SET_MODE", mode: "SIMULATION" }));
       }
@@ -166,10 +201,11 @@ function App() {
 
   const confirmLiveMode = () => {
     if (liveConfirmInput === "CONFIRMAR") {
+      setTradingMode("LIVE");
+      setShowLiveModal(false);
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify({ type: "SET_MODE", mode: "LIVE" }));
       }
-      setShowLiveModal(false);
     }
   };
 
@@ -233,6 +269,22 @@ function App() {
             >
               ⚡ LIVE
             </div>
+          </div>
+          <div 
+            className={`bnb-discount-toggle ${bnbDiscount ? 'active' : ''}`}
+            onClick={() => {
+              const newValue = !bnbDiscount;
+              setBnbDiscount(newValue);
+              bnbDiscountRef.current = newValue;
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "SET_BNB_DISCOUNT", enabled: newValue }));
+              }
+            }}
+          >
+            <div className="bnb-toggle-switch">
+              <div className="bnb-toggle-knob"></div>
+            </div>
+            <span>BNB Fee Discount {bnbDiscount ? '(-25%)' : ''}</span>
           </div>
           {!isRunning ? (
             <button className="btn btn-start" onClick={() => setIsRunning(true)}>

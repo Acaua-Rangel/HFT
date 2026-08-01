@@ -17,7 +17,8 @@ export class ArbitrageCycle {
     feeFetcher: FeeFetcher,
     mathEngine: MathEngine,
     initialAmount: Amount,
-    minProfit: Amount
+    minProfit: Amount,
+    bnbDiscount: boolean = false
   ): Promise<Amount> {
     let fee1: any, fee2: any, fee3: any;
     
@@ -26,6 +27,12 @@ export class ArbitrageCycle {
       fee2 = await feeFetcher.fetchFeeFor(second);
       fee3 = await feeFetcher.fetchFeeFor(third);
     });
+
+    if (bnbDiscount) {
+      fee1 = fee1.withBnbDiscount();
+      fee2 = fee2.withBnbDiscount();
+      fee3 = fee3.withBnbDiscount();
+    }
 
     const profit = this.evaluator.evaluate(pairs, fee1, fee2, fee3, initialAmount);
     

@@ -26,6 +26,8 @@ let currentMode = envMode;
 const initialSimBalanceEnv = parseFloat(process.env.SIMULATION_BALANCE || "1000");
 let virtualBalanceManager = new VirtualBalanceManager(new Amount(initialSimBalanceEnv));
 
+let bnbDiscountEnabled = process.env.BNB_DISCOUNT === "true";
+
 const dbPath = new DatabaseFilePath("./hft.sqlite");
 const db = DatabaseFactory.create(dbPath);
 const asyncWriter = AsyncWriterFactory.create(db);
@@ -134,6 +136,10 @@ const server = Bun.serve({
                 virtualBalanceManager = new VirtualBalanceManager(new Amount(parseFloat(data.amount)));
                 simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo);
                 console.log(`Reset simulation balance to ${data.amount}`);
+            } else if (data.type === "SET_BNB_DISCOUNT") {
+                const oldValue = bnbDiscountEnabled;
+                bnbDiscountEnabled = data.enabled === true;
+                console.log(`💰 BNB Discount: ${oldValue ? 'ON' : 'OFF'} → ${bnbDiscountEnabled ? 'ON ✅ (fees x0.75)' : 'OFF'}`);
             } else if (data.type === "GET_STATUS") {
                 let modeStr = "";
                 currentMode.apply((m) => modeStr = m);
@@ -144,7 +150,8 @@ const server = Bun.serve({
                         type: "STATUS",
                         mode: modeStr,
                         simBalance: simBrl,
-                        realBalance: realBalance
+                        realBalance: realBalance,
+                        bnbDiscount: bnbDiscountEnabled
                     }));
                 });
             }
@@ -173,7 +180,8 @@ setInterval(async () => {
                 feeFetcher,
                 mathEngine,
                 initialAmount,
-                minProfit
+                minProfit,
+                bnbDiscountEnabled
             );
 
             let realProfit = 0;
@@ -203,7 +211,8 @@ setInterval(async () => {
               simBalance: simBrl,
               realBalance: realBalance,
               latency: currentLatency,
-              volume: executedVolume
+              volume: executedVolume,
+              bnbDiscount: bnbDiscountEnabled
             }));
         }
     } catch (err) {

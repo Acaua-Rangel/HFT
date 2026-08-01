@@ -11,4 +11,9 @@ export class Fee {
     const discount = this.calculateDiscount(grossAmount);
     return grossAmount.subtract(discount);
   }
+
+  public withBnbDiscount(): Fee {
+    const discountFactor = new Amount(0.75);
+    return new Fee(this.percentage.multiplyBy(discountFactor));
+  }
 }
