@@ -126,6 +126,7 @@ ingestor.onTick(async (tick) => {
                 if (realProfit > bestRealProfit) {
                     bestRealProfit = realProfit;
                     bestProfitAmount = profitAmount;
+                    triangle.third.applyBinanceSymbol((sym) => bestTrianglePair = sym.toLowerCase());
                 }
             }
 
@@ -144,6 +145,7 @@ const minProfit = new Amount(0.10); // R$ 0.10 of minimum net profit
 let realBalance = 0;
 let executedVolume = 0;
 let latestPnl = 0;
+let bestTrianglePair = "pepebrl";
 
 balanceFetcher.fetchBrlBalance().then(amt => {
     amt.apply((val) => { realBalance = val; });
@@ -237,6 +239,7 @@ setInterval(() => {
       realBalance: realBalance,
       latency: currentLatency,
       volume: executedVolume,
-      bnbDiscount: bnbDiscountEnabled
+      bnbDiscount: bnbDiscountEnabled,
+      bestPair: bestTrianglePair
     }));
 }, 50);

@@ -69,6 +69,7 @@ function App() {
   const [isEditingSimBalance, setIsEditingSimBalance] = useState(false);
   const [simBalanceInput, setSimBalanceInput] = useState("");
   const [bnbDiscount, setBnbDiscount] = useState(false);
+  const [activePair, setActivePair] = useState<string>("pepebrl");
 
   const pnlRef = useRef(pnl);
   const wsRef = useRef<WebSocket | null>(null);
@@ -81,7 +82,8 @@ function App() {
 
     const connect = () => {
       if (!isMounted) return;
-      ws = new WebSocket('ws://localhost:3000');
+      const apiUrl = import.meta.env.VITE_API_URL || 'ws://localhost:3000';
+      ws = new WebSocket(apiUrl);
       wsRef.current = ws;
 
       ws.onmessage = (event) => {
@@ -108,6 +110,7 @@ function App() {
             if (data.balance !== undefined) setBalance(data.balance);
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
+            if (data.bestPair !== undefined) setActivePair(data.bestPair);
           } else if (data.type === 'STATUS') {
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
@@ -152,7 +155,13 @@ function App() {
   useEffect(() => {
     let binanceWs: WebSocket;
     if (isRunning) {
-      binanceWs = new WebSocket('wss://stream.binance.com:9443/ws/pepebrl@depth20@100ms');
+      let binanceWsUrl = import.meta.env.VITE_BINANCE_WS_URL;
+      if (binanceWsUrl) {
+          binanceWsUrl = binanceWsUrl.replace(/\/ws\/[^@]+@/, `/ws/${activePair}@`);
+      } else {
+          binanceWsUrl = `wss://stream.binance.com:9443/ws/${activePair}@depth20@100ms`;
+      }
+      binanceWs = new WebSocket(binanceWsUrl);
       binanceWs.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -180,7 +189,7 @@ function App() {
     return () => {
       if (binanceWs) binanceWs.close();
     };
-  }, [isRunning]);
+  }, [isRunning, activePair]);
 
   const maxTotal = Math.max(
     orderbook.asks[0]?.total || 1,
@@ -355,7 +364,7 @@ function App() {
 
       <div className="dashboard-grid">
         <div className="glass-panel orderbook-panel">
-          <div className="panel-title">Live Orderbook (PEPE/BRL)</div>
+          <div className="panel-title">Live Orderbook ({activePair.toUpperCase().replace('BRL', '/BRL').replace('USDT', '/USDT')})</div>
           <div className="orderbook-container">
             <table className="orderbook-table">
               <thead>
