@@ -10,10 +10,16 @@ export class SimulatedOrderExecutor implements OrderExecutor {
   constructor(
     private readonly stateManager: LocalStateManager,
     private readonly balanceManager: VirtualBalanceManager,
-    private readonly transactionRepo: TransactionRepository
+    private readonly transactionRepo: TransactionRepository,
+    private readonly getLatency: () => number = () => 50
   ) {}
 
   public async executeMarketBuy(pair: Pair, amount: Amount): Promise<OrderFill> {
+    const latency = this.getLatency();
+    if (latency > 0) {
+      await Bun.sleep(latency);
+    }
+
     const book = this.stateManager.retrieveOrderBook(pair);
     const latestTick = book.getLatest();
     
@@ -53,6 +59,11 @@ export class SimulatedOrderExecutor implements OrderExecutor {
   }
 
   private async simulateTrade(side: string, pair: Pair, amount: Amount): Promise<OrderFill> {
+    const latency = this.getLatency();
+    if (latency > 0) {
+      await Bun.sleep(latency);
+    }
+
     const book = this.stateManager.retrieveOrderBook(pair);
     const latestTick = book.getLatest();
     

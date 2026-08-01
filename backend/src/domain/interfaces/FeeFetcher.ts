@@ -2,5 +2,6 @@ import { Fee } from "../valueObjects/Fee";
 import { Pair } from "../valueObjects/Pair";
 
 export interface FeeFetcher {
-  fetchFeeFor(pair: Pair): Promise<Fee>;
+  preloadFees(pairs: Pair[]): Promise<void>;
+  getFeeFor(pair: Pair): Fee;
 }

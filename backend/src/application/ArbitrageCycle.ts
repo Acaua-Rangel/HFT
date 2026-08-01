@@ -22,10 +22,10 @@ export class ArbitrageCycle {
   ): Promise<Amount> {
     let fee1: any, fee2: any, fee3: any;
     
-    await pairs.applyAsync(async (first, second, third) => {
-      fee1 = await feeFetcher.fetchFeeFor(first);
-      fee2 = await feeFetcher.fetchFeeFor(second);
-      fee3 = await feeFetcher.fetchFeeFor(third);
+    pairs.apply((first, second, third) => {
+      fee1 = feeFetcher.getFeeFor(first);
+      fee2 = feeFetcher.getFeeFor(second);
+      fee3 = feeFetcher.getFeeFor(third);
     });
 
     if (bnbDiscount) {

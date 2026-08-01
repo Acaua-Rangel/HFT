@@ -30,102 +30,92 @@ class ApiCredentials {
   }
 }
 
-class FeeCache {
-  private readonly cache: Map<string, Fee> = new Map();
-  private readonly pending: Map<string, Promise<Fee>> = new Map();
-
-  public get(symbol: string): Fee | undefined {
-    return this.cache.get(symbol);
-  }
-
-  public set(symbol: string, fee: Fee): void {
-    this.cache.set(symbol, fee);
-    this.pending.delete(symbol);
-  }
-
-  public getPending(symbol: string): Promise<Fee> | undefined {
-    return this.pending.get(symbol);
-  }
-
-  public setPending(symbol: string, promise: Promise<Fee>): void {
-    this.pending.set(symbol, promise);
-  }
-}
-
 export class BinanceFeeFetcher implements FeeFetcher {
-  private readonly cache = new FeeCache();
+  private readonly cache = new Map<string, Fee>();
   private readonly credentials = new ApiCredentials();
   private readonly defaultFee = new Fee(new Amount(0.001));
 
-  public async fetchFeeFor(pair: Pair): Promise<Fee> {
-    return new Promise((resolve) => {
-      pair.applyBinanceStreamFormat(async (streamName) => {
-        const symbol = streamName.replace("@bookTicker", "").toUpperCase();
+  public async preloadFees(pairs: Pair[]): Promise<void> {
+    if (!this.credentials.isConfigured()) {
+      return;
+    }
 
-        // 1. Check cache first
-        const cached = this.cache.get(symbol);
-        if (cached) {
-          resolve(cached);
-          return;
-        }
+    try {
+      const timestamp = Date.now();
+      const queryString = `timestamp=${timestamp}`;
+      const signature = this.credentials.sign(queryString);
+      const url = `https://api.binance.com/sapi/v1/asset/tradeFee?${queryString}&signature=${signature}`;
 
-        // 2. If no API keys, use default immediately (no HTTP call)
-        if (!this.credentials.isConfigured()) {
-          this.cache.set(symbol, this.defaultFee);
-          resolve(this.defaultFee);
-          return;
-        }
-
-        // 3. Check if a fetch is already in-flight for this symbol
-        const pendingPromise = this.cache.getPending(symbol);
-        if (pendingPromise) {
-          const fee = await pendingPromise;
-          resolve(fee);
-          return;
-        }
-
-        // 4. Start a new fetch and register a safe promise
-        const fetchPromise = this.performHttpRequest(symbol)
-          .then((fee) => {
-            this.cache.set(symbol, fee);
-            return fee;
-          })
-          .catch(() => {
-            console.warn(`⚠️ Fee fetch failed for ${symbol}, using 0.1% fallback.`);
-            this.cache.set(symbol, this.defaultFee);
-            return this.defaultFee;
-          });
-
-        this.cache.setPending(symbol, fetchPromise);
-        const result = await fetchPromise;
-        resolve(result);
+      const response = await fetch(url, {
+        method: "GET",
+        headers: this.credentials.asHeaders(),
       });
-    });
+
+      if (!response.ok) {
+        console.warn(`⚠️ Bulk fee fetch failed: HTTP ${response.status}. Using default fees.`);
+        return;
+      }
+
+      const data = await response.json();
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          if (item.symbol && item.makerCommission) {
+            const feeVal = parseFloat(item.makerCommission);
+            this.cache.set(item.symbol.toUpperCase(), new Fee(new Amount(feeVal)));
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("⚠️ Error during bulk fee preload.", e);
+    }
   }
 
-  private async performHttpRequest(symbol: string): Promise<Fee> {
-    const timestamp = Date.now();
-    const queryString = `symbol=${symbol}&timestamp=${timestamp}`;
-    const signature = this.credentials.sign(queryString);
-    const url = `https://api.binance.com/sapi/v1/asset/tradeFee?${queryString}&signature=${signature}`;
+  public getFeeFor(pair: Pair): Fee {
+    let symbol = "";
+    pair.applyBinanceSymbol((s) => { symbol = s; });
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: this.credentials.asHeaders(),
-    });
-
-    const isOk = response.ok === true;
-    if (!isOk) {
-      throw new Error(`HTTP error: ${response.status}`);
+    const cached = this.cache.get(symbol);
+    if (cached) {
+      return cached;
     }
 
-    const data = await response.json();
-    let makerFee = 0.001; // fallback default if array is empty
-    if (Array.isArray(data) && data.length > 0) {
-      makerFee = parseFloat(data[0].makerCommission);
-    } else if (data.makerCommission) {
-      makerFee = parseFloat(data.makerCommission);
-    }
-    return new Fee(new Amount(makerFee));
+    // If not in cache, fallback to default immediately
+    this.cache.set(symbol, this.defaultFee);
+    
+    // Background fetch for the specific missing pair (fire and forget)
+    this.backgroundFetchFee(symbol);
+
+    return this.defaultFee;
+  }
+
+  private backgroundFetchFee(symbol: string): void {
+    if (!this.credentials.isConfigured()) return;
+
+    (async () => {
+      try {
+        const timestamp = Date.now();
+        const queryString = `symbol=${symbol}&timestamp=${timestamp}`;
+        const signature = this.credentials.sign(queryString);
+        const url = `https://api.binance.com/sapi/v1/asset/tradeFee?${queryString}&signature=${signature}`;
+
+        const response = await fetch(url, {
+          method: "GET",
+          headers: this.credentials.asHeaders(),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          let makerFee = 0.001;
+          if (Array.isArray(data) && data.length > 0) {
+            makerFee = parseFloat(data[0].makerCommission);
+          } else if (data.makerCommission) {
+            makerFee = parseFloat(data.makerCommission);
+          }
+          this.cache.set(symbol, new Fee(new Amount(makerFee)));
+        }
+      } catch (e) {
+        // Silent catch for background update
+      }
+    })();
   }
 }

@@ -49,8 +49,10 @@ globalWsClient.connect().catch(console.error);
 const balanceFetcher = new BinanceBalanceFetcher(globalWsClient);
 const feeFetcher = new BinanceFeeFetcher();
 
+let currentLatency = 0;
+
 const binanceExecutor = new BinanceOrderExecutor(globalWsClient, errorRepo, transactionRepo);
-let simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo);
+let simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo, () => currentLatency);
 
 const getExecutor = () => {
     return currentMode.isLive() ? binanceExecutor : simulatedExecutor;
@@ -95,6 +97,9 @@ activeTriangles.forEach(t => {
     });
 });
 
+// Preload fees before processing ticks to avoid latency
+await feeFetcher.preloadFees([]);
+
 const evaluationLock = new ExecutionLock();
 
 ingestor.onTick(async (tick) => {
@@ -134,10 +139,9 @@ ingestor.onTick(async (tick) => {
 });
 
 const initialAmount = new Amount(1000);
-const minProfit = new Amount(1001);
+const minProfit = new Amount(0.10); // R$ 0.10 of minimum net profit
 
 let realBalance = 0;
-let currentLatency = 0;
 let executedVolume = 0;
 let latestPnl = 0;
 
