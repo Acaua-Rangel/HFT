@@ -138,30 +138,32 @@ export class BinancePriceIngestor implements PriceIngestor {
   }
 
   private processBookTicker(payload: any): void {
-    const isValid = payload.s !== undefined && payload.a !== undefined;
+    const isValid = payload.s !== undefined && payload.a !== undefined && payload.b !== undefined;
     if (!isValid) {
       return;
     }
 
     const symbol = String(payload.s);
     const askPriceVal = parseFloat(String(payload.a));
+    const bidPriceVal = parseFloat(String(payload.b));
 
     this.tickCount++;
     if (this.tickCount === 1) {
-      console.log(`📈 First tick received: ${symbol} @ ${askPriceVal}`);
+      console.log(`📈 First tick received: ${symbol} | Ask: ${askPriceVal} | Bid: ${bidPriceVal}`);
     }
     if (this.tickCount % 1000 === 0) {
-      console.log(`📈 ${this.tickCount} ticks processed. Latest: ${symbol} @ ${askPriceVal}`);
+      console.log(`📈 ${this.tickCount} ticks processed. Latest: ${symbol} | Ask: ${askPriceVal} | Bid: ${bidPriceVal}`);
     }
 
     this.state.findPairAndApply(symbol, (pair) => {
-      this.createAndNotifyTick(pair, askPriceVal);
+      this.createAndNotifyTick(pair, askPriceVal, bidPriceVal);
     });
   }
 
-  private createAndNotifyTick(pair: Pair, priceVal: number): void {
-    const price = new Amount(priceVal);
-    const tick = new Tick(pair, price);
+  private createAndNotifyTick(pair: Pair, askVal: number, bidVal: number): void {
+    const askAmount = new Amount(askVal);
+    const bidAmount = new Amount(bidVal);
+    const tick = new Tick(pair, askAmount, bidAmount);
     this.callbacks.notifyAll(tick);
   }
 }

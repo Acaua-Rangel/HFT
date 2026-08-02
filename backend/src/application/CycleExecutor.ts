@@ -7,11 +7,18 @@ import { ErrorLogRepository, ErrorLogEntry, ErrorType, ErrorMessage, StackTrace,
 import { TransactionRepository } from "../infrastructure/database/TransactionRepository";
 
 export class CycleExecutor {
+  private dustMap = new Map<string, number>();
+
   constructor(
     private readonly executorProvider: () => OrderExecutor,
     private readonly errorRepo: ErrorLogRepository,
     private readonly transactionRepo: TransactionRepository
   ) {}
+
+  public initializeDust(balances: Map<string, number>): void {
+    this.dustMap = balances;
+    console.log(`🧹 Dust Sweeper initialized with ${balances.size} assets from Spot Wallet.`);
+  }
 
   public async executeCycle(pairs: TriangularPairs, initialAmount: Amount, fee1?: any, fee2?: any): Promise<OrderFill> {
     let finalFill = OrderFill.failed();
@@ -34,18 +41,24 @@ export class CycleExecutor {
           return;
         }
 
+        let firstBaseSym = "";
+        first.applyCurrencies((base) => base.applySymbol(s => firstBaseSym = s.toUpperCase()));
+        
+        let qty1Val = 0;
+        qty1.apply((v) => qty1Val = v);
+
+        // Sweeps dust from RAM
+        const existingDust1 = this.dustMap.get(firstBaseSym) || 0;
+        const totalQty1 = qty1Val + existingDust1;
+        const safeQty1 = new Amount(totalQty1);
+
         let isSuccess2 = false;
         let qty2 = new Amount(0);
-        
-        // O OrderExecutor agora retorna a quantidade líquida REAL exata extraída do payload (array fills)
-        // Portanto não precisamos deduzir o fee aqui, apenas truncamos para respeitar a precisão na compra seguinte
-        let safeQty1Val = 0;
-        qty1.apply((v: number) => safeQty1Val = Math.floor(v * 10000) / 10000);
-        const safeQty1 = new Amount(safeQty1Val);
+        let quote2 = new Amount(0); // This is what we actually spent
 
         const fill2 = await this.executeWithTimeout(() => executor.executeMarketBuy(second, safeQty1), 5000);
         
-        fill2.apply((q, quote, p, s) => { isSuccess2 = s; qty2 = q; });
+        fill2.apply((q, quote, p, s) => { isSuccess2 = s; qty2 = q; quote2 = quote; });
 
         if (!isSuccess2) {
           await this.handleBrokenLeg(executor, first, safeQty1, "Leg 2 failed");
@@ -53,20 +66,37 @@ export class CycleExecutor {
           return;
         }
 
-        let safeQty2Val = 0;
-        qty2.apply((v: number) => safeQty2Val = Math.floor(v * 10000) / 10000);
-        const safeQty2 = new Amount(safeQty2Val);
+        // Save remainder dust back to RAM
+        let quote2Val = 0;
+        quote2.apply((v) => quote2Val = v);
+        this.dustMap.set(firstBaseSym, Math.max(0, totalQty1 - quote2Val));
+
+        let secondBaseSym = "";
+        second.applyCurrencies((base) => base.applySymbol(s => secondBaseSym = s.toUpperCase()));
+
+        let qty2Val = 0;
+        qty2.apply((v) => qty2Val = v);
+
+        const existingDust2 = this.dustMap.get(secondBaseSym) || 0;
+        const totalQty2 = qty2Val + existingDust2;
+        const safeQty2 = new Amount(totalQty2);
+
+        let isSuccess3 = false;
+        let qty3 = new Amount(0);
 
         const fill3 = await this.executeWithTimeout(() => executor.executeMarketSell(third, safeQty2), 5000);
         
-        let isSuccess3 = false;
-        fill3.apply((q, quote, p, s) => { isSuccess3 = s; });
+        fill3.apply((q, quote, p, s) => { isSuccess3 = s; qty3 = q; });
 
         if (!isSuccess3) {
           await this.handleBrokenLeg(executor, second, safeQty2, "Leg 3 failed");
           finalFill = OrderFill.failed();
           return;
         }
+
+        let qty3Val = 0;
+        qty3.apply((v) => qty3Val = v);
+        this.dustMap.set(secondBaseSym, Math.max(0, totalQty2 - qty3Val));
 
         finalFill = fill3;
       } catch (err) {

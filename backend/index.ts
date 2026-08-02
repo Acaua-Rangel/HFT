@@ -180,6 +180,7 @@ let bestTrianglePair = "pepebrl";
 balanceFetcher.fetchBalances().then(balances => {
     balances.brl.apply((val) => { realBalance = val; });
     balances.bnb.apply((val) => { realBnbBalance = val; });
+    cycleExecutor.initializeDust(balances.dust);
 });
 
 setInterval(async () => {

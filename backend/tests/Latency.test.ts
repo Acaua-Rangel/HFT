@@ -6,10 +6,10 @@ import { ArbitrageMathEngine } from "../src/application/ArbitrageMathEngine";
 import { LocalStateManager } from "../src/application/LocalStateManager";
 import { TriangularPairs, PairTuple } from "../src/application/TriangularPairs";
 import { Currency } from "../src/domain/valueObjects/Currency";
-import { Pair } from "../domain/valueObjects/Pair";
-import { Amount } from "../domain/valueObjects/Amount";
-import { Fee } from "../domain/valueObjects/Fee";
-import { OrderFill } from "../domain/valueObjects/OrderFill";
+import { Pair } from "../src/domain/valueObjects/Pair";
+import { Amount } from "../src/domain/valueObjects/Amount";
+import { Fee } from "../src/domain/valueObjects/Fee";
+import { OrderFill } from "../src/domain/valueObjects/OrderFill";
 import { OrderExecutor } from "../src/domain/interfaces/OrderExecutor";
 
 test("Cycle Latency Benchmark", async () => {
