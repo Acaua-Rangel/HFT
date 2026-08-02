@@ -172,17 +172,19 @@ let executedVolume = 0;
 let latestPnl = 0;
 let bestTrianglePair = "pepebrl";
 
-balanceFetcher.fetchBrlBalance().then(amt => {
-    amt.apply((val) => { realBalance = val; });
+balanceFetcher.fetchBalances().then(balances => {
+    balances.brl.apply((val) => { realBalance = val; });
+    balances.bnb.apply((val) => { realBnbBalance = val; });
 });
 
 setInterval(async () => {
     try {
         const pingStart = Date.now();
-        const amt = await balanceFetcher.fetchBrlBalance();
+        const balances = await balanceFetcher.fetchBalances();
         currentLatency = Date.now() - pingStart;
         
-        amt.apply((val) => { realBalance = val; });
+        balances.brl.apply((val) => { realBalance = val; });
+        balances.bnb.apply((val) => { realBnbBalance = val; });
     } catch (err) {}
 }, 5000);
 
