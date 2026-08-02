@@ -21,6 +21,13 @@ const formatNumber = (value: number) => {
   return new Intl.NumberFormat('en-US').format(value);
 };
 
+const formatPrice = (value: number) => {
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 8,
+  }).format(value);
+};
+
 const PnlChart = ({ data }: { data: number[] }) => {
   if (data.length < 2) return null;
   const min = Math.min(...data);
@@ -70,6 +77,12 @@ function App() {
   const [simBalanceInput, setSimBalanceInput] = useState("");
   const [bnbDiscount, setBnbDiscount] = useState(false);
   const [activePair, setActivePair] = useState<string>("pepebrl");
+  const [debouncedPair, setDebouncedPair] = useState<string>("pepebrl");
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedPair(activePair), 1500);
+    return () => clearTimeout(timer);
+  }, [activePair]);
 
   const pnlRef = useRef(pnl);
   const wsRef = useRef<WebSocket | null>(null);
@@ -157,9 +170,9 @@ function App() {
     if (isRunning) {
       let binanceWsUrl = import.meta.env.VITE_BINANCE_WS_URL;
       if (binanceWsUrl) {
-          binanceWsUrl = binanceWsUrl.replace(/\/ws\/[^@]+@/, `/ws/${activePair}@`);
+          binanceWsUrl = binanceWsUrl.replace(/\/ws\/[^@]+@/, `/ws/${debouncedPair}@`);
       } else {
-          binanceWsUrl = `wss://stream.binance.com:9443/ws/${activePair}@depth20@100ms`;
+          binanceWsUrl = `wss://stream.binance.com:9443/ws/${debouncedPair}@depth20@100ms`;
       }
       binanceWs = new WebSocket(binanceWsUrl);
       binanceWs.onmessage = (event) => {
@@ -189,7 +202,7 @@ function App() {
     return () => {
       if (binanceWs) binanceWs.close();
     };
-  }, [isRunning, activePair]);
+  }, [isRunning, debouncedPair]);
 
   const maxTotal = Math.max(
     orderbook.asks[0]?.total || 1,
@@ -364,7 +377,7 @@ function App() {
 
       <div className="dashboard-grid">
         <div className="glass-panel orderbook-panel">
-          <div className="panel-title">Live Orderbook ({activePair.toUpperCase().replace('BRL', '/BRL').replace('USDT', '/USDT')})</div>
+          <div className="panel-title">Live Orderbook ({debouncedPair.toUpperCase().replace('BRL', '/BRL').replace('USDT', '/USDT')})</div>
           <div className="orderbook-container">
             <table className="orderbook-table">
               <thead>
@@ -377,7 +390,7 @@ function App() {
               <tbody>
                 {orderbook.asks.map((ask, idx) => (
                   <tr key={`ask-${idx}`}>
-                    <td className="price-ask">{ask.price.toFixed(2)}</td>
+                    <td className="price-ask">{formatPrice(ask.price)}</td>
                     <td>{ask.size}</td>
                     <td>
                       {ask.total}
@@ -392,14 +405,14 @@ function App() {
             </table>
             
             <div className="orderbook-spread">
-              Spread: {((orderbook.asks[orderbook.asks.length - 1]?.price || 0) - (orderbook.bids[0]?.price || 0)).toFixed(2)}
+              Spread: {formatPrice((orderbook.asks[orderbook.asks.length - 1]?.price || 0) - (orderbook.bids[0]?.price || 0))}
             </div>
 
             <table className="orderbook-table">
               <tbody>
                 {orderbook.bids.map((bid, idx) => (
                   <tr key={`bid-${idx}`}>
-                    <td className="price-bid">{bid.price.toFixed(2)}</td>
+                    <td className="price-bid">{formatPrice(bid.price)}</td>
                     <td>{bid.size}</td>
                     <td>
                       {bid.total}
