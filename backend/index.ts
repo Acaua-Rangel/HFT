@@ -21,6 +21,15 @@ import { ExecutionLock } from "./src/application/ExecutionLock";
 import { BinanceWsClient } from "./src/infrastructure/BinanceWsClient";
 
 
+const latestErrors: string[] = [];
+const originalConsoleError = console.error;
+console.error = (...args) => {
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(" ");
+    latestErrors.push(msg);
+    if (latestErrors.length > 10) latestErrors.shift();
+    originalConsoleError(...args);
+};
+
 console.log("🚀 Starting HFT Triangular Arbitrage Engine...");
 
 const envMode = process.env.TRADING_MODE === "LIVE" ? TradingMode.LIVE : TradingMode.SIMULATION;
@@ -258,6 +267,7 @@ setInterval(() => {
       volume: executedVolume,
       bnbDiscount: bnbDiscountEnabled,
       bestPair: bestTrianglePair,
-      isRunning: isEngineRunning
+      isRunning: isEngineRunning,
+      errors: latestErrors
     }));
 }, 50);

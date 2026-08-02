@@ -78,6 +78,7 @@ function App() {
   const [bnbDiscount, setBnbDiscount] = useState(false);
   const [activePair, setActivePair] = useState<string>("pepebrl");
   const [debouncedPair, setDebouncedPair] = useState<string>("pepebrl");
+  const [systemErrors, setSystemErrors] = useState<string[]>([]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedPair(activePair), 1500);
@@ -125,6 +126,7 @@ function App() {
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
             if (data.bestPair !== undefined) setActivePair(data.bestPair);
             if (data.isRunning !== undefined) setIsRunning(data.isRunning);
+            if (data.errors !== undefined) setSystemErrors(data.errors);
           } else if (data.type === 'STATUS') {
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
@@ -439,6 +441,17 @@ function App() {
             </table>
           </div>
         </div>
+
+        {systemErrors.length > 0 && (
+          <div className="glass-panel error-panel" style={{ gridColumn: '1 / -1', borderLeft: '4px solid #ef4444' }}>
+            <div className="panel-title" style={{ color: '#ef4444' }}>⚠️ System Errors & Alerts</div>
+            <div className="error-logs" style={{ maxHeight: '150px', overflowY: 'auto', padding: '10px', fontFamily: 'monospace', fontSize: '12px', color: '#fca5a5' }}>
+              {systemErrors.map((err, idx) => (
+                <div key={idx} style={{ marginBottom: '4px' }}>• {err}</div>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="glass-panel chart-panel">
           <div className="panel-title" style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10 }}>

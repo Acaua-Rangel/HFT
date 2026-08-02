@@ -41,7 +41,7 @@ export class ArbitrageCycle {
       return profit; // Return theoretical profit
     }
 
-    const fill = await this.executor.executeCycle(pairs, initialAmount);
+    const fill = await this.executor.executeCycle(pairs, initialAmount, fee1, fee2);
     
     let actualProfit = profit;
     fill.apply((qty, quote, price, success) => {

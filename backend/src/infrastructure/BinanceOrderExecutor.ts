@@ -111,6 +111,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
   }
 
   private logError(type: string, message: string): void {
+    console.error(`[${type}] ${message}`);
     const entry = new ErrorLogEntry(
         { asString: () => crypto.randomUUID() } as any,
         { asNumber: () => Date.now() } as any,

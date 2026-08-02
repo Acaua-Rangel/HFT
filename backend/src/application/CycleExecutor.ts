@@ -13,7 +13,7 @@ export class CycleExecutor {
     private readonly transactionRepo: TransactionRepository
   ) {}
 
-  public async executeCycle(pairs: TriangularPairs, initialAmount: Amount): Promise<OrderFill> {
+  public async executeCycle(pairs: TriangularPairs, initialAmount: Amount, fee1?: any, fee2?: any): Promise<OrderFill> {
     let finalFill = OrderFill.failed();
     const executor = this.executorProvider();
 
@@ -34,25 +34,38 @@ export class CycleExecutor {
           return;
         }
 
-        const fill2 = await this.executeWithTimeout(() => executor.executeMarketBuy(second, qty1), 5000);
-        
         let isSuccess2 = false;
         let qty2 = new Amount(0);
+        
+        // Aplica a dedução da taxa real (dinâmica) obtida da Binance para garantir saldo suficiente,
+        // e trunca para 4 casas decimais para evitar erros de LOT_SIZE.
+        let deductedQty1 = fee1 ? fee1.deductFrom(qty1) : qty1;
+        let safeQty1Val = 0;
+        deductedQty1.apply((v: number) => safeQty1Val = Math.floor(v * 10000) / 10000);
+        const safeQty1 = new Amount(safeQty1Val);
+
+        const fill2 = await this.executeWithTimeout(() => executor.executeMarketBuy(second, safeQty1), 5000);
+        
         fill2.apply((q, quote, p, s) => { isSuccess2 = s; qty2 = q; });
 
         if (!isSuccess2) {
-          await this.handleBrokenLeg(executor, first, qty1, "Leg 2 failed");
+          await this.handleBrokenLeg(executor, first, safeQty1, "Leg 2 failed");
           finalFill = OrderFill.failed();
           return;
         }
 
-        const fill3 = await this.executeWithTimeout(() => executor.executeMarketSell(third, qty2), 5000);
+        let deductedQty2 = fee2 ? fee2.deductFrom(qty2) : qty2;
+        let safeQty2Val = 0;
+        deductedQty2.apply((v: number) => safeQty2Val = Math.floor(v * 10000) / 10000);
+        const safeQty2 = new Amount(safeQty2Val);
+
+        const fill3 = await this.executeWithTimeout(() => executor.executeMarketSell(third, safeQty2), 5000);
         
         let isSuccess3 = false;
         fill3.apply((q, quote, p, s) => { isSuccess3 = s; });
 
         if (!isSuccess3) {
-          await this.handleBrokenLeg(executor, second, qty2, "Leg 3 failed");
+          await this.handleBrokenLeg(executor, second, safeQty2, "Leg 3 failed");
           finalFill = OrderFill.failed();
           return;
         }
