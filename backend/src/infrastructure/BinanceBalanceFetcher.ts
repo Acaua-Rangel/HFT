@@ -6,9 +6,9 @@ export class BinanceBalanceFetcher {
 
   constructor(private readonly wsClient: BinanceWsClient) {}
 
-  public async fetchBrlBalance(): Promise<Amount> {
+  public async fetchBalances(): Promise<{ brl: Amount, bnb: Amount }> {
     if (!this.wsClient.isReady()) {
-      return new Amount(0);
+      return { brl: new Amount(0), bnb: new Amount(0) };
     }
 
     try {
@@ -20,25 +20,31 @@ export class BinanceBalanceFetcher {
           console.error(`❌ WS Error when fetching balance: ${JSON.stringify(response.error)}`);
           this.hasLoggedWarning = true;
         }
-        return new Amount(0);
+        return { brl: new Amount(0), bnb: new Amount(0) };
       }
 
       this.hasLoggedWarning = false;
       const data = response.result;
       const brlBalance = data.balances?.find((b: any) => b.asset === "BRL");
+      const bnbBalance = data.balances?.find((b: any) => b.asset === "BNB");
       
-      const hasBalance = brlBalance !== undefined;
-      if (hasBalance) {
-        const freeAmount = parseFloat(brlBalance.free);
-        return new Amount(freeAmount);
+      let brlAmount = new Amount(0);
+      let bnbAmount = new Amount(0);
+
+      if (brlBalance !== undefined) {
+        brlAmount = new Amount(parseFloat(brlBalance.free));
       }
-      return new Amount(0);
+      if (bnbBalance !== undefined) {
+        bnbAmount = new Amount(parseFloat(bnbBalance.free));
+      }
+      
+      return { brl: brlAmount, bnb: bnbAmount };
     } catch (e) {
       if (!this.hasLoggedWarning) {
         console.error("❌ Failed to fetch balance via WebSocket", e);
         this.hasLoggedWarning = true;
       }
-      return new Amount(0);
+      return { brl: new Amount(0), bnb: new Amount(0) };
     }
   }
 }

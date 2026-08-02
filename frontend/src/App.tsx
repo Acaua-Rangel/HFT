@@ -79,6 +79,7 @@ function App() {
   const [activePair, setActivePair] = useState<string>("pepebrl");
   const [debouncedPair, setDebouncedPair] = useState<string>("pepebrl");
   const [systemErrors, setSystemErrors] = useState<string[]>([]);
+  const [bnbDiscountLocked, setBnbDiscountLocked] = useState(false);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedPair(activePair), 1500);
@@ -127,6 +128,7 @@ function App() {
             if (data.bestPair !== undefined) setActivePair(data.bestPair);
             if (data.isRunning !== undefined) setIsRunning(data.isRunning);
             if (data.errors !== undefined) setSystemErrors(data.errors);
+            if (data.bnbDiscountLocked !== undefined) setBnbDiscountLocked(data.bnbDiscountLocked);
           } else if (data.type === 'STATUS') {
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
@@ -136,6 +138,7 @@ function App() {
               setBnbDiscount(data.bnbDiscount);
               bnbDiscountRef.current = data.bnbDiscount;
             }
+            if (data.bnbDiscountLocked !== undefined) setBnbDiscountLocked(data.bnbDiscountLocked);
           }
         } catch (e) {
           console.error("Invalid WS message");
@@ -297,8 +300,10 @@ function App() {
             </div>
           </div>
           <div 
-            className={`bnb-discount-toggle ${bnbDiscount ? 'active' : ''}`}
+            className={`bnb-discount-toggle ${bnbDiscount ? 'active' : ''} ${bnbDiscountLocked ? 'locked' : ''}`}
+            style={{ opacity: bnbDiscountLocked ? 0.5 : 1, cursor: bnbDiscountLocked ? 'not-allowed' : 'pointer' }}
             onClick={() => {
+              if (bnbDiscountLocked) return;
               const newValue = !bnbDiscount;
               setBnbDiscount(newValue);
               bnbDiscountRef.current = newValue;
@@ -307,10 +312,17 @@ function App() {
               }
             }}
           >
-            <div className="bnb-toggle-switch">
-              <div className="bnb-toggle-knob"></div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <div style={{ display: 'flex', alignItems: 'center' }}>
+                <div className="bnb-toggle-switch">
+                  <div className="bnb-toggle-knob"></div>
+                </div>
+                <span>BNB Fee Discount {bnbDiscount ? '(-25%)' : ''}</span>
+              </div>
+              {bnbDiscountLocked && (
+                <span style={{ fontSize: '10px', color: '#ef4444', marginTop: '4px' }}>⚠️ Insufficient BNB Balance</span>
+              )}
             </div>
-            <span>BNB Fee Discount {bnbDiscount ? '(-25%)' : ''}</span>
           </div>
           {!isRunning ? (
             <button className="btn btn-start" onClick={() => {

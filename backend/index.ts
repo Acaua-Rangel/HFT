@@ -165,6 +165,9 @@ ingestor.onTick(async (tick) => {
 const minProfit = new Amount(0.10); // R$ 0.10 of minimum net profit
 
 let realBalance = 0;
+let realBnbBalance = 0;
+let bnbDiscountLocked = false;
+let bnbPriceBrl = 3000; // Valor aproximado padrão (atualizado periodicamente)
 let executedVolume = 0;
 let latestPnl = 0;
 let bestTrianglePair = "pepebrl";
@@ -209,6 +212,21 @@ const server = Bun.serve({
                 simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo);
                 console.log(`Reset simulation balance to ${data.amount}`);
             } else if (data.type === "SET_BNB_DISCOUNT") {
+                if (data.enabled === true && bnbDiscountLocked) {
+                    console.log(`⚠️ Blocked attempt to enable BNB Discount. Insufficient BNB balance.`);
+                    // Força envio de status para o cliente reverter a chave visualmente
+                    ws.send(JSON.stringify({
+                        type: "STATUS",
+                        mode: currentMode.isLive() ? "LIVE" : "SIMULATION",
+                        simBalance: initialSimBalanceEnv,
+                        realBalance: realBalance,
+                        bnbDiscount: bnbDiscountEnabled,
+                        isRunning: isEngineRunning,
+                        bnbBalance: realBnbBalance,
+                        bnbDiscountLocked: bnbDiscountLocked
+                    }));
+                    return;
+                }
                 const oldValue = bnbDiscountEnabled;
                 bnbDiscountEnabled = data.enabled === true;
                 console.log(`💰 BNB Discount: ${oldValue ? 'ON' : 'OFF'} → ${bnbDiscountEnabled ? 'ON ✅ (fees x0.75)' : 'OFF'}`);
@@ -227,7 +245,9 @@ const server = Bun.serve({
                         simBalance: simBrl,
                         realBalance: realBalance,
                         bnbDiscount: bnbDiscountEnabled,
-                        isRunning: isEngineRunning
+                        isRunning: isEngineRunning,
+                        bnbBalance: realBnbBalance,
+                        bnbDiscountLocked: bnbDiscountLocked
                     }));
                 });
             }
@@ -246,6 +266,38 @@ const server = Bun.serve({
 console.log(`🌐 WebSocket Server for Dashboard running on ws://localhost:${server.port}`);
 
 // Telemetry loop: Publishes state to frontend 4 times per second
+// Atualiza o preço do BNB periodicamente
+setInterval(async () => {
+    try {
+        const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BNBBRL");
+        if (res.ok) {
+            const data = await res.json();
+            if (data.price) bnbPriceBrl = parseFloat(data.price);
+        }
+    } catch(e) {}
+}, 60000);
+
+setInterval(async () => {
+    let modeStr = "";
+    currentMode.apply((m) => modeStr = m);
+    if (modeStr === "LIVE") {
+        const balances = await balanceFetcher.fetchBalances();
+        balances.brl.apply((val) => realBalance = val);
+        balances.bnb.apply((val) => realBnbBalance = val);
+
+        // Calcula BNB necessário (0.225% do BRL atual)
+        const requiredBnbInBrl = realBalance * 0.00225;
+        const requiredBnb = requiredBnbInBrl / bnbPriceBrl;
+
+        bnbDiscountLocked = realBnbBalance < requiredBnb;
+        
+        if (bnbDiscountLocked && bnbDiscountEnabled) {
+            bnbDiscountEnabled = false;
+            console.log(`⚠️ BNB Discount automatically DISABLED! Insufficient BNB balance. Required: ${requiredBnb.toFixed(6)} BNB.`);
+        }
+    }
+}, 2000);
+
 setInterval(() => {
     let modeStr = "";
     currentMode.apply((m) => modeStr = m);
@@ -268,6 +320,8 @@ setInterval(() => {
       bnbDiscount: bnbDiscountEnabled,
       bestPair: bestTrianglePair,
       isRunning: isEngineRunning,
-      errors: latestErrors
+      errors: latestErrors,
+      bnbBalance: realBnbBalance,
+      bnbDiscountLocked: bnbDiscountLocked
     }));
 }, 50);
