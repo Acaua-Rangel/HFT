@@ -19,6 +19,7 @@ import { SimulatedOrderExecutor } from "./src/infrastructure/SimulatedOrderExecu
 import { TradingMode } from "./src/domain/valueObjects/TradingMode";
 import { ExecutionLock } from "./src/application/ExecutionLock";
 import { BinanceWsClient } from "./src/infrastructure/BinanceWsClient";
+import { BinancePrecisionFetcher } from "./src/infrastructure/BinancePrecisionFetcher";
 
 
 const latestErrors: string[] = [];
@@ -57,11 +58,12 @@ const globalWsClient = new BinanceWsClient(apiKey, apiSecret);
 globalWsClient.connect().catch(console.error);
 
 const balanceFetcher = new BinanceBalanceFetcher(globalWsClient);
+const precisionFetcher = new BinancePrecisionFetcher();
 const feeFetcher = new BinanceFeeFetcher();
 
 let currentLatency = 0;
 
-const binanceExecutor = new BinanceOrderExecutor(globalWsClient, errorRepo, transactionRepo);
+const binanceExecutor = new BinanceOrderExecutor(globalWsClient, errorRepo, transactionRepo, precisionFetcher);
 let simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo, () => currentLatency);
 
 const getExecutor = () => {
@@ -108,7 +110,10 @@ activeTriangles.forEach(t => {
 });
 
 // Preload fees before processing ticks to avoid latency
-await feeFetcher.preloadFees([]);
+const pairsList = [];
+activeTriangles.forEach(t => t.apply((f, s, t) => pairsList.push(f, s, t)));
+await feeFetcher.preloadFees(pairsList);
+await precisionFetcher.preloadPrecisions();
 
 const evaluationLock = new ExecutionLock();
 

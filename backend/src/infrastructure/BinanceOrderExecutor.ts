@@ -6,15 +6,17 @@ import { ErrorLogRepository, ErrorLogEntry, ErrorType, ErrorMessage, StackTrace,
 import { TransactionRepository, TransactionLogEntry, LogId, Timestamp, TradeId, AssetName, MonetaryValue, TradeStatus } from "./database/TransactionRepository";
 import { BinanceWsClient, WsResponse } from "./BinanceWsClient";
 import { ExecutionRateLimiter } from "./ExecutionRateLimiter";
+import { BinancePrecisionFetcher } from "./BinancePrecisionFetcher";
 
 export class BinanceOrderExecutor implements OrderExecutor {
   private rateLimiter: ExecutionRateLimiter;
   private isConnecting = false;
 
   constructor(
-    private readonly wsClient: BinanceWsClient,
+    private wsClient: BinanceWsClient,
     private readonly errorLogger: ErrorLogRepository,
-    private readonly transactionRepo: TransactionRepository
+    private readonly transactionRepo: TransactionRepository,
+    private readonly precisionFetcher: BinancePrecisionFetcher
   ) {
     this.rateLimiter = new ExecutionRateLimiter(50, 10000); // 50 requests per 10s
     this.ensureConnected();
@@ -84,10 +86,12 @@ export class BinanceOrderExecutor implements OrderExecutor {
       // O uso de toFixed + parseFloat (ou envio como string) evita bugs de precisão IEEE 754 (ex: 0.10000000000001)
       params.quoteOrderQty = truncated.toFixed(quoteDecimals);
     } else {
-      // Para moedas base (Quantity), usamos 4 casas (a maioria aceita isso).
-      // Moedas meme podem ter restrições de LOT_SIZE, mas o erro relatado foi no quoteOrderQty.
-      const truncated = Math.floor(amountVal * 10000) / 10000;
-      params.quantity = truncated.toFixed(4);
+      // O LOT_SIZE depende inteiramente do que a API da Binance determinou para o símbolo atual
+      const quantityDecimals = this.precisionFetcher.getQuantityDecimals(symbol);
+
+      const factor = Math.pow(10, quantityDecimals);
+      const truncated = Math.floor(amountVal * factor) / factor;
+      params.quantity = truncated.toFixed(quantityDecimals);
     }
 
     try {

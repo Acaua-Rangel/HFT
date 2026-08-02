@@ -19,16 +19,25 @@ class MockTransactionRepository {
   save(entry: any) {}
 }
 
+class MockPrecisionFetcher {
+  getQuantityDecimals(symbol: string): number {
+    if (symbol.includes("BTC")) return 5;
+    if (symbol.includes("ETH")) return 4;
+    return 0; // Meme coins
+  }
+}
+
 // Mock WebSocket Client
 class MockWsClient extends BinanceWsClient {
   public ready = true;
   public simulateFailure = false;
   public simulateTimeout = false;
+  public lastParams: any = null;
   
   constructor() {
     super("key", "secret");
   }
-  
+
   public override isReady(): boolean {
     return this.ready;
   }
@@ -36,6 +45,7 @@ class MockWsClient extends BinanceWsClient {
   public override async ensureConnected(): Promise<void> {}
   
   public override async sendRequest(method: string, params: any, timeoutMs: number = 3000): Promise<WsResponse> {
+    this.lastParams = params;
     if (!this.ready) {
       throw new Error("Socket disconnected");
     }
@@ -70,9 +80,10 @@ describe("BinanceOrderExecutor Logic Tests", () => {
   test("Rate Limiter - Should prevent execution if limit exceeded", async () => {
     const errRepo = new MockErrorLogRepository();
     const txRepo = new MockTransactionRepository();
+    const precisionFetcher = new MockPrecisionFetcher();
     
     const mockClient = new MockWsClient();
-    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, txRepo as any);
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, txRepo as any, precisionFetcher as any);
 
     // Configure rate limiter to allow ONLY 2 orders
     const rateLimiter = new ExecutionRateLimiter(2, 10000); 
@@ -101,7 +112,8 @@ describe("BinanceOrderExecutor Logic Tests", () => {
   test("WebSocket Drops - Should fail gracefully when disconnected mid-execution", async () => {
     const errRepo = new MockErrorLogRepository();
     const mockClient = new MockWsClient();
-    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any);
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any);
     
     const rateLimiter = new ExecutionRateLimiter(50, 10000);
     executor.forceInjectWsClientForTests(mockClient, rateLimiter);
@@ -120,7 +132,8 @@ describe("BinanceOrderExecutor Logic Tests", () => {
   test("Execution Error - Should fail gracefully on Binance rejection", async () => {
     const errRepo = new MockErrorLogRepository();
     const mockClient = new MockWsClient();
-    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any);
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any);
     
     mockClient.simulateFailure = true;
     const rateLimiter = new ExecutionRateLimiter(50, 10000);
@@ -137,7 +150,8 @@ describe("BinanceOrderExecutor Logic Tests", () => {
   test("Timeout Tolerance - Should fail gracefully on timeout", async () => {
     const errRepo = new MockErrorLogRepository();
     const mockClient = new MockWsClient();
-    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any);
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any);
     
     mockClient.simulateTimeout = true;
     const rateLimiter = new ExecutionRateLimiter(50, 10000);
@@ -149,5 +163,41 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     expect(success).toBe(false);
     expect(errRepo.errors.length).toBe(1);
     expect(errRepo.errors[0].errorType.value).toBe("ORDER_FAILED");
+  });
+
+  test("Precision - Should use 5 decimals for BTC quantity on Sell", async () => {
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
+
+    const btcPair = new Pair(new Currency("BTC"), new Currency("USDT"));
+    await executor.executeMarketSell(btcPair, new Amount(1.12345678));
+
+    expect(mockClient.lastParams.quantity).toBe("1.12345");
+  });
+
+  test("Precision - Should use 4 decimals for ETH quantity on Sell", async () => {
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
+
+    const ethPair = new Pair(new Currency("ETH"), new Currency("USDT"));
+    await executor.executeMarketSell(ethPair, new Amount(1.12345678));
+
+    expect(mockClient.lastParams.quantity).toBe("1.1234");
+  });
+
+  test("Precision - Should use 0 decimals for MEME quantity on Sell", async () => {
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
+
+    const pepePair = new Pair(new Currency("PEPE"), new Currency("USDT"));
+    await executor.executeMarketSell(pepePair, new Amount(154032.403));
+
+    expect(mockClient.lastParams.quantity).toBe("154032");
   });
 });

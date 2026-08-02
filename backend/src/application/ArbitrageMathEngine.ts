@@ -31,7 +31,24 @@ export class ArbitrageMathEngine implements MathEngine {
     const brlReceived = ethBrlTick.convertSell(ethAfterFee);
     const finalBrl = fee3.deductFrom(brlReceived);
 
-    return finalBrl.subtract(initialBrl);
+    let profitResult = finalBrl.subtract(initialBrl);
+
+    // Se as taxas forem pagas em BNB, os volumes repassados nas pernas foram de 100% (sem desconto)
+    // Para refletir o verdadeiro lucro, precisamos descontar o valor equivalente em BRL do BNB que foi gasto.
+    if (fee1.isBnbPaid) {
+      let f1 = 0, f2 = 0, f3 = 0, initBrl = 0;
+      fee1.percentage.apply(v => f1 = v);
+      fee2.percentage.apply(v => f2 = v);
+      fee3.percentage.apply(v => f3 = v);
+      initialBrl.apply(v => initBrl = v);
+
+      const totalFeePercentage = f1 + f2 + f3;
+      const estimatedBnbCostInBrl = initBrl * totalFeePercentage;
+      
+      profitResult = profitResult.subtract(new Amount(estimatedBnbCostInBrl));
+    }
+
+    return profitResult;
   }
 
   public isProfitable(profit: Amount, minimumExpected: Amount): boolean {
