@@ -30,6 +30,7 @@ const initialSimBalanceEnv = parseFloat(process.env.SIMULATION_BALANCE || "1000"
 let virtualBalanceManager = new VirtualBalanceManager(new Amount(initialSimBalanceEnv));
 
 let bnbDiscountEnabled = process.env.BNB_DISCOUNT === "true";
+let isEngineRunning = false;
 
 const dbPath = new DatabaseFilePath("./hft.sqlite");
 const db = DatabaseFactory.create(dbPath);
@@ -106,16 +107,29 @@ ingestor.onTick(async (tick) => {
     stateManager.updateState(tick);
 
     await evaluationLock.runIfUnlocked(async () => {
+        if (!isEngineRunning) return;
+        
         try {
             let bestProfitAmount = new Amount(-9999999);
             let bestRealProfit = -9999999;
+
+            let currentUsableBalance = 1000;
+            if (currentMode.isLive()) {
+                currentUsableBalance = realBalance > 0 ? realBalance : 0;
+            } else {
+                virtualBalanceManager.applyAllBalances((simBalances) => {
+                    currentUsableBalance = simBalances.get("BRL") || 1000;
+                });
+            }
+            // Utiliza 99% do saldo disponível para evitar erros de saldo insuficiente devido a pequenas flutuações e taxas
+            const usableAmount = new Amount(currentUsableBalance * 0.99);
 
             for (const triangle of activeTriangles) {
                 const profitAmount = await arbitrageCycle.evaluateAndExecute(
                     triangle,
                     feeFetcher,
                     mathEngine,
-                    initialAmount,
+                    usableAmount,
                     minProfit,
                     bnbDiscountEnabled
                 );
@@ -139,7 +153,6 @@ ingestor.onTick(async (tick) => {
     });
 });
 
-const initialAmount = new Amount(1000);
 const minProfit = new Amount(0.10); // R$ 0.10 of minimum net profit
 
 let realBalance = 0;
@@ -190,6 +203,9 @@ const server = Bun.serve({
                 const oldValue = bnbDiscountEnabled;
                 bnbDiscountEnabled = data.enabled === true;
                 console.log(`💰 BNB Discount: ${oldValue ? 'ON' : 'OFF'} → ${bnbDiscountEnabled ? 'ON ✅ (fees x0.75)' : 'OFF'}`);
+            } else if (data.type === "TOGGLE_ENGINE") {
+                isEngineRunning = data.running === true;
+                console.log(`Engine running state: ${isEngineRunning ? 'ACTIVE 🟢' : 'HALTED 🔴'}`);
             } else if (data.type === "GET_STATUS") {
                 let modeStr = "";
                 currentMode.apply((m) => modeStr = m);
@@ -201,7 +217,8 @@ const server = Bun.serve({
                         mode: modeStr,
                         simBalance: simBrl,
                         realBalance: realBalance,
-                        bnbDiscount: bnbDiscountEnabled
+                        bnbDiscount: bnbDiscountEnabled,
+                        isRunning: isEngineRunning
                     }));
                 });
             }
@@ -240,6 +257,7 @@ setInterval(() => {
       latency: currentLatency,
       volume: executedVolume,
       bnbDiscount: bnbDiscountEnabled,
-      bestPair: bestTrianglePair
+      bestPair: bestTrianglePair,
+      isRunning: isEngineRunning
     }));
 }, 50);

@@ -124,10 +124,12 @@ function App() {
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
             if (data.bestPair !== undefined) setActivePair(data.bestPair);
+            if (data.isRunning !== undefined) setIsRunning(data.isRunning);
           } else if (data.type === 'STATUS') {
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
             if (data.realBalance !== undefined) setBalance(data.realBalance);
+            if (data.isRunning !== undefined) setIsRunning(data.isRunning);
             if (data.bnbDiscount !== undefined) {
               setBnbDiscount(data.bnbDiscount);
               bnbDiscountRef.current = data.bnbDiscount;
@@ -309,11 +311,21 @@ function App() {
             <span>BNB Fee Discount {bnbDiscount ? '(-25%)' : ''}</span>
           </div>
           {!isRunning ? (
-            <button className="btn btn-start" onClick={() => setIsRunning(true)}>
+            <button className="btn btn-start" onClick={() => {
+              setIsRunning(true);
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "TOGGLE_ENGINE", running: true }));
+              }
+            }}>
               INITIATE ENGINE
             </button>
           ) : (
-            <button className="btn btn-stop" onClick={() => setIsRunning(false)}>
+            <button className="btn btn-stop" onClick={() => {
+              setIsRunning(false);
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "TOGGLE_ENGINE", running: false }));
+              }
+            }}>
               HALT TRADING
             </button>
           )}
