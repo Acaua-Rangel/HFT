@@ -107,7 +107,7 @@ export class BinancePriceIngestor implements PriceIngestor {
 
   constructor() {
     this.state = new IngestorState(
-      new WebSocket("wss://stream.binance.com:9443/ws"),
+      new WebSocket("wss://stream.binance.com:9443/stream"),
       new SubscriptionMap()
     );
     this.state.attachWsHandler(this.handleMessage.bind(this));
@@ -115,7 +115,7 @@ export class BinancePriceIngestor implements PriceIngestor {
 
   public subscribe(pair: Pair): void {
     pair.applyBinanceStreamFormat((streamName) => {
-      const symbolStr = streamName.replace("@bookTicker", "").toUpperCase();
+      const symbolStr = streamName.replace("@depth5@100ms", "").toUpperCase();
 
       // Deduplicate: don't subscribe twice for the same symbol
       if (this.state.isSubscribed(symbolStr)) {
@@ -134,36 +134,41 @@ export class BinancePriceIngestor implements PriceIngestor {
   private handleMessage(event: MessageEvent): void {
     const rawString = String(event.data);
     const parsedData = JSON.parse(rawString);
-    this.processBookTicker(parsedData);
+    this.processDepthStream(parsedData);
   }
 
-  private processBookTicker(payload: any): void {
-    const isValid = payload.s !== undefined && payload.a !== undefined && payload.b !== undefined;
-    if (!isValid) {
+  private processDepthStream(payload: any): void {
+    if (!payload.stream || !payload.data || !payload.data.asks || !payload.data.bids) {
       return;
     }
 
-    const symbol = String(payload.s);
-    const askPriceVal = parseFloat(String(payload.a));
-    const bidPriceVal = parseFloat(String(payload.b));
+    const symbol = payload.stream.replace("@depth5@100ms", "").toUpperCase();
+    const data = payload.data;
 
     this.tickCount++;
-    if (this.tickCount === 1) {
-      console.log(`📈 First tick received: ${symbol} | Ask: ${askPriceVal} | Bid: ${bidPriceVal}`);
-    }
-    if (this.tickCount % 1000 === 0) {
-      console.log(`📈 ${this.tickCount} ticks processed. Latest: ${symbol} | Ask: ${askPriceVal} | Bid: ${bidPriceVal}`);
+    if (this.tickCount === 1 || this.tickCount % 1000 === 0) {
+      const topAsk = data.asks[0] ? data.asks[0][0] : "N/A";
+      const topBid = data.bids[0] ? data.bids[0][0] : "N/A";
+      console.log(`📈 Tick [${this.tickCount}]: ${symbol} | Top Ask: ${topAsk} | Top Bid: ${topBid}`);
     }
 
     this.state.findPairAndApply(symbol, (pair) => {
-      this.createAndNotifyTick(pair, askPriceVal, bidPriceVal);
+      this.createAndNotifyTick(pair, data.asks, data.bids);
     });
   }
 
-  private createAndNotifyTick(pair: Pair, askVal: number, bidVal: number): void {
-    const askAmount = new Amount(askVal);
-    const bidAmount = new Amount(bidVal);
-    const tick = new Tick(pair, askAmount, bidAmount);
+  private createAndNotifyTick(pair: Pair, rawAsks: string[][], rawBids: string[][]): void {
+    const asks = rawAsks.map(level => ({
+      price: new Amount(parseFloat(level[0])),
+      qty: new Amount(parseFloat(level[1]))
+    }));
+
+    const bids = rawBids.map(level => ({
+      price: new Amount(parseFloat(level[0])),
+      qty: new Amount(parseFloat(level[1]))
+    }));
+
+    const tick = new Tick(pair, asks, bids);
     this.callbacks.notifyAll(tick);
   }
 }

@@ -26,7 +26,7 @@ test("Binance Price Ingestor & Math Engine Integration > Should fetch real Ask/B
 
   // 2. Create Domain Entities
   const btcUsdtPair = new Pair(new Currency("BTC"), new Currency("USDT"));
-  const realTick = new Tick(btcUsdtPair, new Amount(ask), new Amount(bid));
+  const realTick = new Tick(btcUsdtPair, [{price: new Amount(ask), qty: new Amount(10)}], [{price: new Amount(bid), qty: new Amount(10)}]);
 
   // 3. Validate Tick Logic
   const initialUsdt = new Amount(1000);
@@ -50,8 +50,8 @@ test("Binance Price Ingestor & Math Engine Integration > Should fetch real Ask/B
   // 4. Validate MathEngine integration
   const mathEngine = new ArbitrageMathEngine();
   const book1 = new OrderBook(); book1.add(realTick);
-  const book2 = new OrderBook(); book2.add(new Tick(new Pair(new Currency("ETH"), new Currency("BTC")), new Amount(1), new Amount(1))); // Dummy
-  const book3 = new OrderBook(); book3.add(new Tick(new Pair(new Currency("ETH"), new Currency("USDT")), new Amount(1), new Amount(1))); // Dummy
+  const book2 = new OrderBook(); book2.add(new Tick(new Pair(new Currency("ETH"), new Currency("BTC")), [{price: new Amount(1), qty: new Amount(100)}], [{price: new Amount(1), qty: new Amount(100)}])); // Dummy
+  const book3 = new OrderBook(); book3.add(new Tick(new Pair(new Currency("ETH"), new Currency("USDT")), [{price: new Amount(1), qty: new Amount(100)}], [{price: new Amount(1), qty: new Amount(100)}])); // Dummy
 
   const zeroFee = new Fee(new Amount(0));
 

@@ -15,7 +15,7 @@ describe("LocalStateManager", () => {
     let book = manager.retrieveOrderBook(pair);
     expect(book.getLatest()).toBeUndefined();
 
-    const tick = new Tick(pair, new Amount(100000), new Amount(99990));
+    const tick = new Tick(pair, [{price: new Amount(100000), qty: new Amount(10)}], [{price: new Amount(99990), qty: new Amount(10)}]);
     manager.updateState(tick);
 
     book = manager.retrieveOrderBook(pair);
@@ -31,7 +31,7 @@ describe("LocalStateManager", () => {
     manager.registerPair(btcBrl);
     manager.registerPair(ethBrl);
 
-    manager.updateState(new Tick(btcBrl, new Amount(100000), new Amount(99990)));
+    manager.updateState(new Tick(btcBrl, [{price: new Amount(100000), qty: new Amount(10)}], [{price: new Amount(99990), qty: new Amount(10)}]));
 
     expect(manager.retrieveOrderBook(btcBrl).getLatest()).toBeDefined();
     expect(manager.retrieveOrderBook(ethBrl).getLatest()).toBeUndefined();

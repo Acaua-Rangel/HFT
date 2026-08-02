@@ -13,9 +13,9 @@ describe("ArbitrageMathEngine", () => {
     const initialBrl = new Amount(1000);
     const fee = new Fee(new Amount(0.001)); // 0.1%
 
-    const btcBrlBook = new OrderBook(); btcBrlBook.add(new Tick(new Pair(new Currency("BTC"), new Currency("BRL")), new Amount(100000), new Amount(100000)));
-    const ethBtcBook = new OrderBook(); ethBtcBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BTC")), new Amount(0.05), new Amount(0.05)));
-    const ethBrlBook = new OrderBook(); ethBrlBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BRL")), new Amount(6000), new Amount(6000)));
+    const btcBrlBook = new OrderBook(); btcBrlBook.add(new Tick(new Pair(new Currency("BTC"), new Currency("BRL")), [{price: new Amount(100000), qty: new Amount(10)}], [{price: new Amount(100000), qty: new Amount(10)}]));
+    const ethBtcBook = new OrderBook(); ethBtcBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BTC")), [{price: new Amount(0.05), qty: new Amount(100)}], [{price: new Amount(0.05), qty: new Amount(100)}]));
+    const ethBrlBook = new OrderBook(); ethBrlBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BRL")), [{price: new Amount(6000), qty: new Amount(100)}], [{price: new Amount(6000), qty: new Amount(100)}]));
 
     // 1. Buy BTC with BRL
     // 1000 / 100000 = 0.01 BTC
@@ -66,9 +66,9 @@ describe("ArbitrageMathEngine", () => {
     const standardFee = new Fee(new Amount(0.001)); // 0.1%
     const bnbFee = standardFee.withBnbDiscount(); // 0.075%
 
-    const btcBrlBook = new OrderBook(); btcBrlBook.add(new Tick(new Pair(new Currency("BTC"), new Currency("BRL")), new Amount(100000), new Amount(100000)));
-    const ethBtcBook = new OrderBook(); ethBtcBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BTC")), new Amount(0.05), new Amount(0.05)));
-    const ethBrlBook = new OrderBook(); ethBrlBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BRL")), new Amount(6000), new Amount(6000)));
+    const btcBrlBook = new OrderBook(); btcBrlBook.add(new Tick(new Pair(new Currency("BTC"), new Currency("BRL")), [{price: new Amount(100000), qty: new Amount(10)}], [{price: new Amount(100000), qty: new Amount(10)}]));
+    const ethBtcBook = new OrderBook(); ethBtcBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BTC")), [{price: new Amount(0.05), qty: new Amount(100)}], [{price: new Amount(0.05), qty: new Amount(100)}]));
+    const ethBrlBook = new OrderBook(); ethBrlBook.add(new Tick(new Pair(new Currency("ETH"), new Currency("BRL")), [{price: new Amount(6000), qty: new Amount(100)}], [{price: new Amount(6000), qty: new Amount(100)}]));
 
     // Se pago com BNB, não há dedução nas pernas:
     // 1. Buy BTC: 1000 / 100000 = 0.01 BTC
