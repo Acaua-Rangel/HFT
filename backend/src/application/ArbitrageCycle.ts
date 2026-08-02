@@ -5,6 +5,8 @@ import { MathEngine } from "../domain/interfaces/MathEngine";
 import { TriangularPairs } from "./TriangularPairs";
 import { Amount } from "../domain/valueObjects/Amount";
 import { Pair } from "../domain/valueObjects/Pair";
+import { StateManager } from "../domain/interfaces/StateManager";
+import { Currency } from "../domain/valueObjects/Currency";
 
 export class ArbitrageCycle {
   constructor(
@@ -18,7 +20,8 @@ export class ArbitrageCycle {
     mathEngine: MathEngine,
     initialAmount: Amount,
     minProfit: Amount,
-    bnbDiscount: boolean = false
+    bnbDiscount: boolean = false,
+    stateManager?: StateManager
   ): Promise<Amount> {
     let fee1: any, fee2: any, fee3: any;
     
@@ -26,13 +29,55 @@ export class ArbitrageCycle {
       fee1 = feeFetcher.getFeeFor(first);
       fee2 = feeFetcher.getFeeFor(second);
       fee3 = feeFetcher.getFeeFor(third);
-    });
+      
+      if (bnbDiscount && stateManager) {
+        // Obter o preço do BNB em USDT
+        const bnbUsdtTick = stateManager.retrieveOrderBook(new Pair(new Currency("BNB"), new Currency("USDT"))).getLatest();
+        let bnbPrice = 550; // default fallback se faltar tick
+        if (bnbUsdtTick) {
+           // Em vez de complicar com ask/bid, basta um calculateCost genérico p/ 1 token
+           let cost = bnbUsdtTick.calculateCost(new Amount(1));
+           cost.apply(v => bnbPrice = v || 550);
+        }
 
-    if (bnbDiscount) {
-      fee1 = fee1.withBnbDiscount();
-      fee2 = fee2.withBnbDiscount();
-      fee3 = fee3.withBnbDiscount();
-    }
+        // Helper genérico para verificar a regra
+        const applyDiscountIfEligible = (pair: Pair, fee: any): any => {
+          let eligible = true;
+          let assetPriceUsdt = 0;
+          const book = stateManager.retrieveOrderBook(pair);
+          const tick = book.getLatest();
+          
+          if (tick) {
+            let cost = tick.calculateCost(new Amount(1));
+            let priceInQuote = 0;
+            cost.apply(v => priceInQuote = v);
+
+            pair.applyCurrencies((base, quote) => {
+              quote.applySymbol(q => {
+                 // Simplificação: se for cotado em USDT, testamos direto. 
+                 // (Pra BRL daria um pouco diferente, mas SHIB/USDT cobre o gap do HFT)
+                 if (q === "USDT") {
+                    assetPriceUsdt = priceInQuote;
+                 }
+              });
+            });
+            
+            if (assetPriceUsdt > 0) {
+               const priceInBnb = assetPriceUsdt / bnbPrice;
+               if (priceInBnb < 0.00000001) {
+                  eligible = false; // BNB Discount NÃO se qualifica!
+               }
+            }
+          }
+
+          return eligible ? fee.withBnbDiscount() : fee;
+        };
+
+        fee1 = applyDiscountIfEligible(first, fee1);
+        fee2 = applyDiscountIfEligible(second, fee2);
+        fee3 = applyDiscountIfEligible(third, fee3);
+      }
+    });
 
     const profit = this.evaluator.evaluate(pairs, fee1, fee2, fee3, initialAmount);
     

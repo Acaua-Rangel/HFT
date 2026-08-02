@@ -109,6 +109,11 @@ activeTriangles.forEach(t => {
     });
 });
 
+// Adiciona BNBUSDT para calcular a regra de desconto do BNB (< 0.00000001)
+const bnbUsdtPair = new Pair(new Currency("BNB"), new Currency("USDT"));
+stateManager.registerPair(bnbUsdtPair);
+ingestor.subscribe(bnbUsdtPair);
+
 // Preload fees before processing ticks to avoid latency
 const pairsList = [];
 activeTriangles.forEach(t => t.apply((f, s, t) => pairsList.push(f, s, t)));
@@ -145,7 +150,8 @@ ingestor.onTick(async (tick) => {
                     mathEngine,
                     usableAmount,
                     minProfit,
-                    bnbDiscountEnabled
+                    bnbDiscountEnabled,
+                    stateManager
                 );
 
                 let realProfit = 0;
