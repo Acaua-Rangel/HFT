@@ -62,12 +62,22 @@ class MockWsClient extends BinanceWsClient {
         error: { code: -1013, msg: "Filter failure: LOT_SIZE" }
       };
     }
+    const baseAsset = params.symbol ? params.symbol.replace(/USDT|BRL|BTC/, "") : "BTC";
+    
     return {
       id: "mock-id",
       status: 200,
       result: {
         executedQty: "10.0",
-        cummulativeQuoteQty: "50000.0"
+        cummulativeQuoteQty: "50000.0",
+        fills: [
+          {
+            price: "5000.0",
+            qty: "10.0",
+            commission: "0.01",
+            commissionAsset: baseAsset
+          }
+        ]
       }
     };
   }

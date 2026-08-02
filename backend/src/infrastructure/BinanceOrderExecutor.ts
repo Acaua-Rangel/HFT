@@ -68,7 +68,8 @@ export class BinanceOrderExecutor implements OrderExecutor {
     const params: any = {
       symbol,
       side,
-      type: "MARKET"
+      type: "MARKET",
+      newOrderRespType: "FULL"
     };
 
     if (side === "BUY") {
@@ -103,9 +104,34 @@ export class BinanceOrderExecutor implements OrderExecutor {
       }
 
       const data = res.result;
-      const executedQty = new Amount(parseFloat(data.executedQty || "0"));
+      let executedQtyVal = parseFloat(data.executedQty || "0");
       const cummulativeQuoteQty = new Amount(parseFloat(data.cummulativeQuoteQty || "0"));
       
+      // Se a ordem retornou fills, calculamos a comissão exata deduzida do ativo negociado
+      if (Array.isArray(data.fills)) {
+        let baseSym = "";
+        pair.applyCurrencies((base, quote) => base.applySymbol(s => baseSym = s.toUpperCase()));
+        
+        let quoteSym = "";
+        pair.applyCurrencies((base, quote) => quote.applySymbol(s => quoteSym = s.toUpperCase()));
+
+        for (const fill of data.fills) {
+           const commission = parseFloat(fill.commission || "0");
+           const commissionAsset = (fill.commissionAsset || "").toUpperCase();
+           
+           // Se estamos COMPRANDO, recebemos a moeda base. Se a taxa foi cobrada na moeda base, recebemos menos!
+           if (side === "BUY" && commissionAsset === baseSym) {
+             executedQtyVal -= commission;
+           }
+           // Se estamos VENDENDO, recebemos a moeda quote. Se a taxa foi cobrada na moeda quote, recebemos menos!
+           // O executor retorna OrderFill com executedQty (base asset amount) e cummulativeQuoteQty (quote asset amount).
+           // Contudo, nas nossas pernas, o 'qty' que passamos pra frente na Venda não importa pra próxima perna,
+           // pois a perna final joga em BRL (onde a arbitragem acaba). O foco é no BUY que alimenta o SELL.
+        }
+      }
+
+      const executedQty = new Amount(executedQtyVal);
+
       let averagePriceVal = 0;
       cummulativeQuoteQty.apply((c) => {
         executedQty.apply((e) => {

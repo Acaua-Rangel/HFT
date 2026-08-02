@@ -37,11 +37,10 @@ export class CycleExecutor {
         let isSuccess2 = false;
         let qty2 = new Amount(0);
         
-        // Aplica a dedução da taxa real (dinâmica) obtida da Binance para garantir saldo suficiente,
-        // e trunca para 4 casas decimais para evitar erros de LOT_SIZE.
-        let deductedQty1 = fee1 ? fee1.deductFrom(qty1) : qty1;
+        // O OrderExecutor agora retorna a quantidade líquida REAL exata extraída do payload (array fills)
+        // Portanto não precisamos deduzir o fee aqui, apenas truncamos para respeitar a precisão na compra seguinte
         let safeQty1Val = 0;
-        deductedQty1.apply((v: number) => safeQty1Val = Math.floor(v * 10000) / 10000);
+        qty1.apply((v: number) => safeQty1Val = Math.floor(v * 10000) / 10000);
         const safeQty1 = new Amount(safeQty1Val);
 
         const fill2 = await this.executeWithTimeout(() => executor.executeMarketBuy(second, safeQty1), 5000);
@@ -54,9 +53,8 @@ export class CycleExecutor {
           return;
         }
 
-        let deductedQty2 = fee2 ? fee2.deductFrom(qty2) : qty2;
         let safeQty2Val = 0;
-        deductedQty2.apply((v: number) => safeQty2Val = Math.floor(v * 10000) / 10000);
+        qty2.apply((v: number) => safeQty2Val = Math.floor(v * 10000) / 10000);
         const safeQty2 = new Amount(safeQty2Val);
 
         const fill3 = await this.executeWithTimeout(() => executor.executeMarketSell(third, safeQty2), 5000);
