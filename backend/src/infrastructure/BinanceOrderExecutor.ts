@@ -70,9 +70,24 @@ export class BinanceOrderExecutor implements OrderExecutor {
     };
 
     if (side === "BUY") {
-      params.quoteOrderQty = amountVal;
+      // Determina a precisão do ativo de cotação (Quote Asset)
+      let quoteDecimals = 8;
+      if (symbol.endsWith("BRL") || symbol.endsWith("EUR") || symbol.endsWith("TRY")) {
+        quoteDecimals = 2;
+      } else if (symbol.endsWith("USDT") || symbol.endsWith("USDC") || symbol.endsWith("FDUSD")) {
+        quoteDecimals = 4; // Margem segura para stablecoins
+      }
+
+      const factor = Math.pow(10, quoteDecimals);
+      const truncated = Math.floor(amountVal * factor) / factor;
+      
+      // O uso de toFixed + parseFloat (ou envio como string) evita bugs de precisão IEEE 754 (ex: 0.10000000000001)
+      params.quoteOrderQty = truncated.toFixed(quoteDecimals);
     } else {
-      params.quantity = amountVal;
+      // Para moedas base (Quantity), usamos 4 casas (a maioria aceita isso).
+      // Moedas meme podem ter restrições de LOT_SIZE, mas o erro relatado foi no quoteOrderQty.
+      const truncated = Math.floor(amountVal * 10000) / 10000;
+      params.quantity = truncated.toFixed(4);
     }
 
     try {
