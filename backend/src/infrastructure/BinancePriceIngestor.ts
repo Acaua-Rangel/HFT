@@ -161,13 +161,13 @@ export class BinancePriceIngestor implements PriceIngestor {
 
   private createAndNotifyTick(pair: Pair, rawAsks: string[][], rawBids: string[][]): void {
     const asks = rawAsks.map(level => ({
-      price: new Amount(parseFloat(level[0])),
-      qty: new Amount(parseFloat(level[1]))
+      price: new Amount(parseFloat(level[0]!)),
+      qty: new Amount(parseFloat(level[1]!))
     }));
 
     const bids = rawBids.map(level => ({
-      price: new Amount(parseFloat(level[0])),
-      qty: new Amount(parseFloat(level[1]))
+      price: new Amount(parseFloat(level[0]!)),
+      qty: new Amount(parseFloat(level[1]!))
     }));
 
     const tick = new Tick(pair, asks, bids);

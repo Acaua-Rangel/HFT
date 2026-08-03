@@ -6,7 +6,7 @@ async function run() {
   console.log("Total triangles found:", res.length);
   const coins = res.map(t => {
       let b = "";
-      t.first.applyCurrencies((base, quote) => quote.applySymbol(s => b = s));
+      t.pairTuple.first.applyCurrencies((base: any, quote: any) => quote.applySymbol((s: any) => b = s));
       return b;
   });
 }

@@ -13,13 +13,13 @@ export class BinanceAutoScanner {
         return triangles;
       }
       
-      const data = await response.json();
+      const data: any = await response.json();
 
       // Busca todos os preços atuais para o filtro de Stablecoins
       const priceResp = await fetch("https://api.binance.com/api/v3/ticker/price");
       let priceMap = new Map<string, number>();
       if (priceResp.ok) {
-        const priceData = await priceResp.json();
+        const priceData: any = await priceResp.json();
         for (const item of priceData) {
           priceMap.set(item.symbol, parseFloat(item.price));
         }

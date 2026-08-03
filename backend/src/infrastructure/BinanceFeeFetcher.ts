@@ -56,7 +56,7 @@ export class BinanceFeeFetcher implements FeeFetcher {
         return;
       }
 
-      const data = await response.json();
+      const data: any = await response.json();
       if (Array.isArray(data)) {
         for (const item of data) {
           if (item.symbol && item.makerCommission) {
@@ -104,7 +104,7 @@ export class BinanceFeeFetcher implements FeeFetcher {
         });
 
         if (response.ok) {
-          const data = await response.json();
+          const data: any = await response.json();
           let makerFee = 0.001;
           if (Array.isArray(data) && data.length > 0) {
             makerFee = parseFloat(data[0].makerCommission);

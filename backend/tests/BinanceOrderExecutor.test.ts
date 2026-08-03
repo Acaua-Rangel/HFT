@@ -42,7 +42,7 @@ class MockWsClient extends BinanceWsClient {
     return this.ready;
   }
   
-  public override async ensureConnected(): Promise<void> {}
+  public async ensureConnected(): Promise<void> {}
   
   public override async sendRequest(method: string, params: any, timeoutMs: number = 3000): Promise<WsResponse> {
     this.lastParams = params;

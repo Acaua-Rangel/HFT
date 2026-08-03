@@ -57,7 +57,7 @@ describe("Broken Leg Scenario (Risk protection)", () => {
     expect(saveSpy).toHaveBeenCalledTimes(1);
     
     // Verify the log entry has the correct details
-    const savedEntry = saveSpy.mock.calls[0][0];
+    const savedEntry = saveSpy.mock.calls[0]![0];
     
     expect((savedEntry as any).errorType.asString()).toBe("BROKEN_LEG");
     expect((savedEntry as any).message.asString()).toContain("ETHBTC");

@@ -9,9 +9,9 @@ export class SqlStatement {
 }
 
 export class QueryParameters {
-    constructor(private readonly values: unknown[]) {}
+    constructor(private readonly values: any[]) {}
 
-    public asArray(): unknown[] {
+    public asArray(): any[] {
         return this.values;
     }
 }

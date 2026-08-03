@@ -6,16 +6,16 @@ export class BinancePrecisionFetcher {
     try {
       const response = await fetch("https://api.binance.com/api/v3/exchangeInfo");
       if (response.ok) {
-        const data = await response.json();
+        const data: any = await response.json();
         for (const item of data.symbols) {
           const lotSizeFilter = item.filters.find((f: any) => f.filterType === "LOT_SIZE");
           if (lotSizeFilter && lotSizeFilter.stepSize) {
             const stepSizeStr = parseFloat(lotSizeFilter.stepSize).toString();
             let decimals = 0;
             if (stepSizeStr.includes(".")) {
-              decimals = stepSizeStr.split(".")[1].length;
+              decimals = stepSizeStr.split(".")[1]!.length;
             } else if (stepSizeStr.includes("e-")) {
-              decimals = parseInt(stepSizeStr.split("e-")[1], 10);
+              decimals = parseInt(stepSizeStr.split("e-")[1]!, 10);
             }
             this.quantityPrecisionCache.set(item.symbol.toUpperCase(), decimals);
           }

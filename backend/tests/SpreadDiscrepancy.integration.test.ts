@@ -10,7 +10,7 @@ import { Fee } from "../src/domain/valueObjects/Fee";
 test("Binance Price Ingestor & Math Engine Integration > Should fetch real Ask/Bid from Binance and calculate spread discrepancy", async () => {
   // 1. Fetch real OrderBook from Binance
   const res = await fetch("https://api.binance.com/api/v3/ticker/bookTicker?symbol=BTCUSDT");
-  const data = await res.json();
+  const data: any = await res.json();
 
   expect(data.symbol).toBe("BTCUSDT");
   expect(data.askPrice).toBeDefined();

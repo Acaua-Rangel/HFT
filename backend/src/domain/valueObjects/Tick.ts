@@ -19,7 +19,7 @@ export class Tick {
 
   public calculateCost(quantity: Amount): Amount {
     // Apenas para testes antigos que precisam de um preço (usamos o melhor ask)
-    if (this.asks.length > 0) {
+    if (this.asks.length > 0 && this.asks[0]) {
       return this.asks[0].price.multiplyBy(quantity);
     }
     return new Amount(0);
@@ -96,5 +96,9 @@ export class Tick {
 
   public applyBinanceSymbol(callback: (symbol: string) => void): void {
     this.pair.applyBinanceSymbol(callback);
+  }
+
+  public applyTopAsk(callback: (level: Level | undefined) => void): void {
+    callback(this.asks.length > 0 ? this.asks[0] : undefined);
   }
 }

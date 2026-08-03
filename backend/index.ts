@@ -42,6 +42,7 @@ let virtualBalanceManager = new VirtualBalanceManager(new Amount(initialSimBalan
 
 let bnbDiscountEnabled = process.env.BNB_DISCOUNT === "true";
 let isEngineRunning = false;
+const bnbBlacklist = new Set<string>();
 
 const dbPath = new DatabaseFilePath("./hft.sqlite");
 const db = DatabaseFactory.create(dbPath);
@@ -106,8 +107,8 @@ stateManager.registerPair(bnbUsdtPair);
 ingestor.subscribe(bnbUsdtPair);
 
 // Preload fees before processing ticks to avoid latency
-const pairsList = [];
-activeTriangles.forEach(t => t.apply((f, s, t) => pairsList.push(f, s, t)));
+const pairsList: Pair[] = [];
+activeTriangles.forEach(t => t.apply((f, s, thirdPair) => pairsList.push(f, s, thirdPair)));
 await feeFetcher.preloadFees(pairsList);
 await precisionFetcher.preloadPrecisions();
 
@@ -162,6 +163,12 @@ ingestor.onTick(async (tick) => {
 
             for (let ti = 0; ti < activeTriangles.length; ti++) {
                 const triangle = activeTriangles[ti]!;
+
+                if (bnbDiscountEnabled) {
+                    let baseSym = "";
+                    triangle.third.applyCurrencies((base) => base.applySymbol(s => baseSym = s));
+                    if (bnbBlacklist.has(baseSym)) continue;
+                }
 
                 for (const lot of lotSizes) {
                     const candidateAmount = new Amount(lot);
@@ -321,7 +328,8 @@ const server = Bun.serve({
                         bnbDiscount: bnbDiscountEnabled,
                         isRunning: isEngineRunning,
                         bnbBalance: realBnbBalance,
-                        bnbDiscountLocked: bnbDiscountLocked
+                        bnbDiscountLocked: bnbDiscountLocked,
+                        blacklistedCount: bnbBlacklist.size
                     }));
                 });
             }
@@ -345,11 +353,48 @@ setInterval(async () => {
     try {
         const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BNBBRL");
         if (res.ok) {
-            const data = await res.json();
+            const data: any = await res.json();
             if (data.price) bnbPriceBrl = parseFloat(data.price);
         }
     } catch(e) {}
 }, 60000);
+
+// BNB Discount Dynamic Blacklist Updater
+setInterval(() => {
+    if (!bnbDiscountEnabled) return;
+    
+    const bnbTick = stateManager.retrieveOrderBook(new Pair(new Currency("BNB"), new Currency("USDT")));
+    let bnbPriceUsdt = 0;
+    if (bnbTick && bnbTick.getLatest()) {
+        bnbTick.getLatest()!.applyTopAsk((topAsk) => {
+            if (topAsk) topAsk.price.apply(p => bnbPriceUsdt = p);
+        });
+    }
+    if (bnbPriceUsdt === 0) return;
+
+    activeTriangles.forEach(t => {
+        let baseSym = "";
+        t.third.applyCurrencies((base) => base.applySymbol(s => baseSym = s));
+        
+        t.third.applyCurrencies((base) => {
+            const baseTick = stateManager.retrieveOrderBook(new Pair(base, new Currency("USDT")));
+            if (baseTick && baseTick.getLatest()) {
+                baseTick.getLatest()!.applyTopAsk((baseAsk) => {
+                    if (baseAsk) {
+                        let basePriceUsdt = 0;
+                        baseAsk.price.apply(p => basePriceUsdt = p);
+                        const priceInBnb = basePriceUsdt / bnbPriceUsdt;
+                        if (priceInBnb < 0.00000001) {
+                            bnbBlacklist.add(baseSym);
+                        } else {
+                            bnbBlacklist.delete(baseSym);
+                        }
+                    }
+                });
+            }
+        });
+    });
+}, 15000);
 
 setInterval(async () => {
     let modeStr = "";
@@ -396,7 +441,8 @@ setInterval(() => {
       isRunning: isEngineRunning,
       errors: latestErrors,
       bnbBalance: realBnbBalance,
-      bnbDiscountLocked: bnbDiscountLocked
+      bnbDiscountLocked: bnbDiscountLocked,
+      blacklistedCount: bnbBlacklist.size
     }));
 }, 50);
 
