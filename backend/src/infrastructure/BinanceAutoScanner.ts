@@ -14,6 +14,16 @@ export class BinanceAutoScanner {
       }
       
       const data = await response.json();
+
+      // Busca todos os preços atuais para o filtro de Stablecoins
+      const priceResp = await fetch("https://api.binance.com/api/v3/ticker/price");
+      let priceMap = new Map<string, number>();
+      if (priceResp.ok) {
+        const priceData = await priceResp.json();
+        for (const item of priceData) {
+          priceMap.set(item.symbol, parseFloat(item.price));
+        }
+      }
       
       // Armazena as moedas base que pareiam com USDT e as que pareiam com BRL
       const usdtBases = new Set<string>();
@@ -38,6 +48,15 @@ export class BinanceAutoScanner {
 
         // Se a moeda faz par com BRL E também faz par com USDT
         if (usdtBases.has(baseStr)) {
+          const usdtSymbol = `${baseStr}${baseQuoteStr}`; // ex: USDCUSDT
+          const priceUsdt = priceMap.get(usdtSymbol);
+
+          // Filtro Dinâmico Anti-Stablecoin (Ignora se o valor for ~ 1.00 USD)
+          if (priceUsdt !== undefined && priceUsdt >= 0.95 && priceUsdt <= 1.05) {
+            console.log(`🚫 AutoScanner: Banned Stablecoin ${baseStr} (Dynamic Peg Detection - Price: ${priceUsdt})`);
+            continue;
+          }
+
           const baseAsset = new Currency(baseStr);
           
           // Leg 1: Compra USDT com BRL
