@@ -12,6 +12,7 @@ import { ArbitrageCycle } from "./src/application/ArbitrageCycle";
 import { Currency } from "./src/domain/valueObjects/Currency";
 import { Pair } from "./src/domain/valueObjects/Pair";
 import { TriangularPairs, PairTuple } from "./src/application/TriangularPairs";
+import { BinanceAutoScanner } from "./src/infrastructure/BinanceAutoScanner";
 import { Amount } from "./src/domain/valueObjects/Amount";
 import { BinanceBalanceFetcher } from "./src/infrastructure/BinanceBalanceFetcher";
 import { VirtualBalanceManager } from "./src/infrastructure/VirtualBalanceManager";
@@ -78,26 +79,16 @@ const brl = new Currency("BRL");
 const eth = new Currency("ETH");
 const btc = new Currency("BTC");
 
-function createCCVTriangle(baseStr: string, quoteStr: string): TriangularPairs {
-    const base = new Currency(baseStr);
-    const quote = new Currency(quoteStr);
+async function startHftEngine() {
+    const scanner = new BinanceAutoScanner();
+    const activeTriangles = await scanner.scanTriangles("USDT", "BRL");
     
-    const quoteBrl = new Pair(quote, brl);
-    const baseQuote = new Pair(base, quote);
-    const baseBrl = new Pair(base, brl);
+    if (activeTriangles.length === 0) {
+        console.error("❌ Fatal Error: AutoScanner returned 0 triangles. Check your internet or Binance API status.");
+        process.exit(1);
+    }
 
-    const tuple = new PairTuple(quoteBrl, baseQuote);
-    return new TriangularPairs(tuple, baseBrl);
-}
-
-const activeTriangles: TriangularPairs[] = [
-    createCCVTriangle("ETH", "BTC"),
-    createCCVTriangle("PEPE", "USDT"),
-    createCCVTriangle("SHIB", "USDT"),
-    createCCVTriangle("DOGE", "USDT"),
-];
-
-activeTriangles.forEach(t => {
+    activeTriangles.forEach(t => {
     t.apply((first, second, third) => {
         stateManager.registerPair(first);
         stateManager.registerPair(second);
@@ -339,3 +330,10 @@ setInterval(() => {
       bnbDiscountLocked: bnbDiscountLocked
     }));
 }, 50);
+
+} // End of startHftEngine
+
+startHftEngine().catch(e => {
+    console.error("❌ HFT Engine crashed:", e);
+    process.exit(1);
+});
