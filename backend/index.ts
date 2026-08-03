@@ -120,9 +120,6 @@ ingestor.onTick(async (tick) => {
         if (!isEngineRunning) return;
         
         try {
-            let bestProfitAmount = new Amount(-9999999);
-            let bestRealProfit = -9999999;
-
             let currentUsableBalance = 1000;
             if (currentMode.isLive()) {
                 currentUsableBalance = realBalance > 0 ? realBalance : 0;
@@ -131,32 +128,104 @@ ingestor.onTick(async (tick) => {
                     currentUsableBalance = simBalances.get("BRL") || 1000;
                 });
             }
-            // Utiliza 99% do saldo disponível para evitar erros de saldo insuficiente devido a pequenas flutuações e taxas
-            const usableAmount = new Amount(currentUsableBalance * 0.99);
 
-            for (const triangle of activeTriangles) {
-                const profitAmount = await arbitrageCycle.evaluateAndExecute(
-                    triangle,
-                    feeFetcher,
-                    mathEngine,
-                    usableAmount,
-                    minProfit,
-                    bnbDiscountEnabled,
-                    stateManager
-                );
+            // ── Smart Lot Scanner ──────────────────────────────────────
+            // Gera lotes candidatos de maior para menor.
+            // Percentuais do saldo: 99%, 50%, 25%, 10%, 5%
+            // Valores fixos mínimos: R$200, R$100, R$50, R$25, R$11
+            const percentageLots = [0.99, 0.50, 0.25, 0.10, 0.05]
+                .map(p => currentUsableBalance * p)
+                .filter(v => v >= 11); // Binance minimum ~ R$11
 
-                let realProfit = 0;
-                profitAmount.apply((val) => { realProfit = val; });
+            const fixedLots = [200, 100, 50, 25, 11]
+                .filter(v => v <= currentUsableBalance);
 
-                if (realProfit > bestRealProfit) {
-                    bestRealProfit = realProfit;
-                    bestProfitAmount = profitAmount;
-                    triangle.third.applyBinanceSymbol((sym) => bestTrianglePair = sym.toLowerCase());
+            // Mescla, deduplica por proximidade, e ordena decrescente
+            const allCandidates = [...percentageLots, ...fixedLots];
+            const seen = new Set<number>();
+            const lotSizes: number[] = [];
+            for (const v of allCandidates) {
+                const rounded = Math.floor(v * 100) / 100;
+                if (rounded >= 11 && !seen.has(rounded)) {
+                    seen.add(rounded);
+                    lotSizes.push(rounded);
+                }
+            }
+            lotSizes.sort((a, b) => b - a);
+
+            if (lotSizes.length === 0) return;
+
+            // ── Fase 1: Sondar todos os triângulos × lotes (sem executar) ──
+            let bestProfit = -9999999;
+            let bestLotSize = 0;
+            let bestTriangleIdx = -1;
+
+            for (let ti = 0; ti < activeTriangles.length; ti++) {
+                const triangle = activeTriangles[ti]!;
+
+                for (const lot of lotSizes) {
+                    const candidateAmount = new Amount(lot);
+                    const profit = arbitrageCycle.evaluateOnly(
+                        triangle,
+                        feeFetcher,
+                        mathEngine,
+                        candidateAmount,
+                        bnbDiscountEnabled,
+                        stateManager
+                    );
+
+                    let profitVal = -9999999;
+                    profit.apply(v => profitVal = v);
+
+                    if (profitVal > bestProfit) {
+                        bestProfit = profitVal;
+                        bestLotSize = lot;
+                        bestTriangleIdx = ti;
+                    }
+
+                    // Se este lote já é lucrativo, não precisa testar lotes menores
+                    // para este triângulo (lote maior = mais lucro absoluto quando viável)
+                    let minProfitVal = 0;
+                    minProfit.apply(v => minProfitVal = v);
+                    if (profitVal > minProfitVal) break;
                 }
             }
 
-            if (bestRealProfit > -999999) {
-                latestPnl = bestRealProfit;
+            // ── Fase 2: Executar o melhor candidato (se lucrativo) ──
+            if (bestTriangleIdx >= 0 && bestProfit > 0) {
+                let minProfitVal = 0;
+                minProfit.apply(v => minProfitVal = v);
+
+                const winnerTriangle = activeTriangles[bestTriangleIdx]!;
+
+                if (bestProfit > minProfitVal && winnerTriangle) {
+                    const winnerAmount = new Amount(bestLotSize);
+
+                    console.log(`💰 Smart Lot: Executing R$${bestLotSize.toFixed(2)} on triangle #${bestTriangleIdx} (projected profit: R$${bestProfit.toFixed(4)})`);
+
+                    const actualProfit = await arbitrageCycle.evaluateAndExecute(
+                        winnerTriangle,
+                        feeFetcher,
+                        mathEngine,
+                        winnerAmount,
+                        minProfit,
+                        bnbDiscountEnabled,
+                        stateManager
+                    );
+
+                    let realProfitVal = 0;
+                    actualProfit.apply(v => realProfitVal = v);
+
+                    latestPnl = realProfitVal;
+                    winnerTriangle.third.applyBinanceSymbol((sym) => bestTrianglePair = sym.toLowerCase());
+                } else {
+                    latestPnl = bestProfit;
+                    if (winnerTriangle) {
+                        winnerTriangle.third.applyBinanceSymbol((sym) => bestTrianglePair = sym.toLowerCase());
+                    }
+                }
+            } else {
+                latestPnl = bestProfit > -999999 ? bestProfit : 0;
             }
         } catch (err) {
             console.error("Evaluation error:", err);

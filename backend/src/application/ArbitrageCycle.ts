@@ -14,6 +14,64 @@ export class ArbitrageCycle {
     private readonly executor: CycleExecutor
   ) {}
 
+  /**
+   * Avalia o lucro teórico de um ciclo SEM executar ordens.
+   * Usado para sondar múltiplos tamanhos de lote rapidamente.
+   */
+  public evaluateOnly(
+    pairs: TriangularPairs,
+    feeFetcher: FeeFetcher,
+    mathEngine: MathEngine,
+    initialAmount: Amount,
+    bnbDiscount: boolean = false,
+    stateManager?: StateManager
+  ): Amount {
+    let fee1: any, fee2: any, fee3: any;
+
+    pairs.apply((first, second, third) => {
+      fee1 = feeFetcher.getFeeFor(first);
+      fee2 = feeFetcher.getFeeFor(second);
+      fee3 = feeFetcher.getFeeFor(third);
+
+      if (bnbDiscount && stateManager) {
+        const bnbUsdtTick = stateManager.retrieveOrderBook(new Pair(new Currency("BNB"), new Currency("USDT"))).getLatest();
+        let bnbPrice = 550;
+        if (bnbUsdtTick) {
+          let cost = bnbUsdtTick.calculateCost(new Amount(1));
+          cost.apply(v => bnbPrice = v || 550);
+        }
+
+        const applyDiscountIfEligible = (pair: Pair, fee: any): any => {
+          let eligible = true;
+          let assetPriceUsdt = 0;
+          const book = stateManager.retrieveOrderBook(pair);
+          const tick = book.getLatest();
+          if (tick) {
+            let cost = tick.calculateCost(new Amount(1));
+            let priceInQuote = 0;
+            cost.apply(v => priceInQuote = v);
+            pair.applyCurrencies((base, quote) => {
+              quote.applySymbol(q => {
+                if (q === "USDT") assetPriceUsdt = priceInQuote;
+              });
+            });
+            if (assetPriceUsdt > 0) {
+              const priceInBnb = assetPriceUsdt / bnbPrice;
+              if (priceInBnb < 0.00000001) eligible = false;
+            }
+          }
+          return eligible ? fee.withBnbDiscount() : fee;
+        };
+
+        fee1 = applyDiscountIfEligible(first, fee1);
+        fee2 = applyDiscountIfEligible(second, fee2);
+        fee3 = applyDiscountIfEligible(third, fee3);
+      }
+    });
+
+    return this.evaluator.evaluate(pairs, fee1, fee2, fee3, initialAmount);
+  }
+
   public async evaluateAndExecute(
     pairs: TriangularPairs,
     feeFetcher: FeeFetcher,
