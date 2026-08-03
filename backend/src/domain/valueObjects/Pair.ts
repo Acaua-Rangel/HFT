@@ -15,7 +15,7 @@ export class Pair {
   public applyBinanceStreamFormat(callback: (streamName: string) => void): void {
     this.base.applySymbol((baseSym) => {
       this.quote.applySymbol((quoteSym) => {
-        const streamName = `${baseSym.toLowerCase()}${quoteSym.toLowerCase()}@depth5@100ms`;
+        const streamName = `${baseSym.toLowerCase()}${quoteSym.toLowerCase()}@depth20@100ms`;
         callback(streamName);
       });
     });

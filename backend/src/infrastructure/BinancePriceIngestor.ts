@@ -115,7 +115,7 @@ export class BinancePriceIngestor implements PriceIngestor {
 
   public subscribe(pair: Pair): void {
     pair.applyBinanceStreamFormat((streamName) => {
-      const symbolStr = streamName.replace("@depth5@100ms", "").toUpperCase();
+      const symbolStr = streamName.replace("@depth20@100ms", "").toUpperCase();
 
       // Deduplicate: don't subscribe twice for the same symbol
       if (this.state.isSubscribed(symbolStr)) {
@@ -142,7 +142,7 @@ export class BinancePriceIngestor implements PriceIngestor {
       return;
     }
 
-    const symbol = payload.stream.replace("@depth5@100ms", "").toUpperCase();
+    const symbol = payload.stream.replace("@depth20@100ms", "").toUpperCase();
     const data = payload.data;
 
     this.tickCount++;
