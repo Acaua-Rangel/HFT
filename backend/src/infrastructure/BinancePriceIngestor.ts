@@ -68,19 +68,21 @@ class IngestorState {
     this.pendingStreams = [];
   }
 
+  private flushTimeout: any = null;
+
   public queueStream(streamName: string): void {
-    const isOpen = this.ws.readyState === WebSocket.OPEN;
-    if (isOpen) {
-      // WS already open, send immediately as single batch
-      const payload = {
-        method: "SUBSCRIBE",
-        params: [streamName],
-        id: Date.now(),
-      };
-      this.ws.send(JSON.stringify(payload));
-      return;
-    }
     this.pendingStreams.push(streamName);
+    
+    if (this.flushTimeout) {
+      clearTimeout(this.flushTimeout);
+    }
+    
+    this.flushTimeout = setTimeout(() => {
+      const isOpen = this.ws.readyState === WebSocket.OPEN;
+      if (isOpen) {
+        this.flushPending();
+      }
+    }, 100);
   }
 
   public attachWsHandler(handler: (event: MessageEvent) => void): void {
