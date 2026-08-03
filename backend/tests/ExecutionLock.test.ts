@@ -1,66 +1,66 @@
-import { test, expect, describe } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { ExecutionLock } from "../src/application/ExecutionLock";
 
 describe("ExecutionLock", () => {
-    test("should acquire and release lock correctly", () => {
-        const lock = new ExecutionLock();
-        
-        expect(lock.isCurrentlyLocked()).toBe(false);
-        
-        const acquired = lock.acquire();
-        expect(acquired).toBe(true);
-        expect(lock.isCurrentlyLocked()).toBe(true);
-        
-        const acquiredAgain = lock.acquire();
-        expect(acquiredAgain).toBe(false); // Should not acquire if already locked
-        expect(lock.isCurrentlyLocked()).toBe(true);
+	test("should acquire and release lock correctly", () => {
+		const lock = new ExecutionLock();
 
-        lock.release();
-        expect(lock.isCurrentlyLocked()).toBe(false);
+		expect(lock.isCurrentlyLocked()).toBe(false);
 
-        const acquiredAfterRelease = lock.acquire();
-        expect(acquiredAfterRelease).toBe(true);
-    });
+		const acquired = lock.acquire();
+		expect(acquired).toBe(true);
+		expect(lock.isCurrentlyLocked()).toBe(true);
 
-    test("runIfUnlocked should prevent concurrent executions", async () => {
-        const lock = new ExecutionLock();
-        let executionCount = 0;
+		const acquiredAgain = lock.acquire();
+		expect(acquiredAgain).toBe(false); // Should not acquire if already locked
+		expect(lock.isCurrentlyLocked()).toBe(true);
 
-        const slowTask = async () => {
-            await new Promise(resolve => setTimeout(resolve, 50));
-            executionCount++;
-        };
+		lock.release();
+		expect(lock.isCurrentlyLocked()).toBe(false);
 
-        // Try to execute the task concurrently 3 times
-        const p1 = lock.runIfUnlocked(slowTask);
-        const p2 = lock.runIfUnlocked(slowTask);
-        const p3 = lock.runIfUnlocked(slowTask);
+		const acquiredAfterRelease = lock.acquire();
+		expect(acquiredAfterRelease).toBe(true);
+	});
 
-        await Promise.all([p1, p2, p3]);
+	test("runIfUnlocked should prevent concurrent executions", async () => {
+		const lock = new ExecutionLock();
+		let executionCount = 0;
 
-        // Since the lock prevents concurrent execution, only the first call should succeed
-        expect(executionCount).toBe(1);
-    });
+		const slowTask = async () => {
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			executionCount++;
+		};
 
-    test("runIfUnlocked should release the lock even if an error is thrown", async () => {
-        const lock = new ExecutionLock();
+		// Try to execute the task concurrently 3 times
+		const p1 = lock.runIfUnlocked(slowTask);
+		const p2 = lock.runIfUnlocked(slowTask);
+		const p3 = lock.runIfUnlocked(slowTask);
 
-        const failingTask = async () => {
-            throw new Error("Simulated failure");
-        };
+		await Promise.all([p1, p2, p3]);
 
-        // Suppress the error for this test
-        try {
-            await lock.runIfUnlocked(failingTask);
-        } catch (e) {
-            // expected
-        }
+		// Since the lock prevents concurrent execution, only the first call should succeed
+		expect(executionCount).toBe(1);
+	});
 
-        // Lock should be released despite the error
-        expect(lock.isCurrentlyLocked()).toBe(false);
-        
-        // We should be able to acquire it again
-        const acquired = lock.acquire();
-        expect(acquired).toBe(true);
-    });
+	test("runIfUnlocked should release the lock even if an error is thrown", async () => {
+		const lock = new ExecutionLock();
+
+		const failingTask = async () => {
+			throw new Error("Simulated failure");
+		};
+
+		// Suppress the error for this test
+		try {
+			await lock.runIfUnlocked(failingTask);
+		} catch (_e) {
+			// expected
+		}
+
+		// Lock should be released despite the error
+		expect(lock.isCurrentlyLocked()).toBe(false);
+
+		// We should be able to acquire it again
+		const acquired = lock.acquire();
+		expect(acquired).toBe(true);
+	});
 });

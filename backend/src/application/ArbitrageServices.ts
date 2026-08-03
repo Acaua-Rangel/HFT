@@ -1,13 +1,13 @@
-import { StateManager } from "../domain/interfaces/StateManager";
-import { MathEngine } from "../domain/interfaces/MathEngine";
-import { OrderExecutor } from "../domain/interfaces/OrderExecutor";
-import { FeeFetcher } from "../domain/interfaces/FeeFetcher";
+import type { FeeFetcher } from "../domain/interfaces/FeeFetcher";
+import type { MathEngine } from "../domain/interfaces/MathEngine";
+import type { OrderExecutor } from "../domain/interfaces/OrderExecutor";
+import type { StateManager } from "../domain/interfaces/StateManager";
 
 export class ArbitrageServices {
-  constructor(
-    public readonly state: StateManager,
-    public readonly math: MathEngine,
-    public readonly executor: OrderExecutor,
-    public readonly fees: FeeFetcher
-  ) {}
+	constructor(
+		public readonly state: StateManager,
+		public readonly math: MathEngine,
+		public readonly executor: OrderExecutor,
+		public readonly fees: FeeFetcher,
+	) {}
 }

@@ -61,6 +61,8 @@ const PnlChart = ({ data }: { data: number[] }) => {
 
 function App() {
   const [isRunning, setIsRunning] = useState(false);
+  const [isTickLoggerRunning, setIsTickLoggerRunning] = useState(true);
+  const [vpsStats, setVpsStats] = useState({ cpu: 0, ram: 0, storage: 0 });
   const [orderbook, setOrderbook] = useState<{ asks: OrderBookEntry[], bids: OrderBookEntry[] }>({ asks: [], bids: [] });
   const [pnl, setPnl] = useState<number | null>(null);
   const [pnlHistory, setPnlHistory] = useState<number[]>([]);
@@ -127,6 +129,8 @@ function App() {
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
             if (data.bestPair !== undefined) setActivePair(data.bestPair);
             if (data.isRunning !== undefined) setIsRunning(data.isRunning);
+            if (data.isTickLoggerRunning !== undefined) setIsTickLoggerRunning(data.isTickLoggerRunning);
+            if (data.vpsStats !== undefined) setVpsStats(data.vpsStats);
             if (data.errors !== undefined) setSystemErrors(data.errors);
             if (data.bnbDiscountLocked !== undefined) setBnbDiscountLocked(data.bnbDiscountLocked);
           } else if (data.type === 'STATUS') {
@@ -134,6 +138,7 @@ function App() {
             if (data.simBalance !== undefined) setSimBalance(data.simBalance);
             if (data.realBalance !== undefined) setBalance(data.realBalance);
             if (data.isRunning !== undefined) setIsRunning(data.isRunning);
+            if (data.isTickLoggerRunning !== undefined) setIsTickLoggerRunning(data.isTickLoggerRunning);
             if (data.bnbDiscount !== undefined) {
               setBnbDiscount(data.bnbDiscount);
               bnbDiscountRef.current = data.bnbDiscount;
@@ -324,6 +329,24 @@ function App() {
               )}
             </div>
           </div>
+          <div 
+            className={`bnb-discount-toggle ${isTickLoggerRunning ? 'active' : ''}`}
+            style={{ cursor: 'pointer', marginLeft: '10px' }}
+            onClick={() => {
+              const newValue = !isTickLoggerRunning;
+              setIsTickLoggerRunning(newValue);
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ type: "TOGGLE_TICK_LOGGER", running: newValue }));
+              }
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center' }}>
+              <div className="bnb-toggle-switch">
+                <div className="bnb-toggle-knob"></div>
+              </div>
+              <span style={{ marginLeft: '10px' }}>Tick Archiver {isTickLoggerRunning ? '(ON)' : '(OFF)'}</span>
+            </div>
+          </div>
           {!isRunning ? (
             <button className="btn btn-start" onClick={() => {
               setIsRunning(true);
@@ -471,6 +494,36 @@ function App() {
           </div>
           <div style={{ width: '100%', height: '100%', position: 'relative' }}>
             <PnlChart data={pnlHistory} />
+          </div>
+        </div>
+      </div>
+
+      <div className="metrics-row" style={{ marginTop: '20px' }}>
+        <div className="glass-panel metric-card">
+          <div className="panel-title">VPS CPU Usage</div>
+          <div className="metric-value">
+            {vpsStats.cpu.toFixed(1)}%
+            <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.1)', marginTop: '8px', borderRadius: '2px' }}>
+              <div style={{ width: `${vpsStats.cpu}%`, height: '100%', background: vpsStats.cpu > 80 ? '#ef4444' : '#10b981', borderRadius: '2px', transition: 'width 0.3s' }}></div>
+            </div>
+          </div>
+        </div>
+        <div className="glass-panel metric-card">
+          <div className="panel-title">VPS RAM Usage</div>
+          <div className="metric-value">
+            {vpsStats.ram.toFixed(1)}%
+            <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.1)', marginTop: '8px', borderRadius: '2px' }}>
+              <div style={{ width: `${vpsStats.ram}%`, height: '100%', background: vpsStats.ram > 80 ? '#ef4444' : '#10b981', borderRadius: '2px', transition: 'width 0.3s' }}></div>
+            </div>
+          </div>
+        </div>
+        <div className="glass-panel metric-card">
+          <div className="panel-title">VPS Storage Usage</div>
+          <div className="metric-value">
+            {vpsStats.storage.toFixed(1)}%
+            <div style={{ width: '100%', height: '4px', background: 'rgba(255,255,255,0.1)', marginTop: '8px', borderRadius: '2px' }}>
+              <div style={{ width: `${vpsStats.storage}%`, height: '100%', background: vpsStats.storage > 90 ? '#ef4444' : '#3b82f6', borderRadius: '2px', transition: 'width 0.3s' }}></div>
+            </div>
           </div>
         </div>
       </div>

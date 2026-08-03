@@ -1,104 +1,104 @@
-import { Pair } from "./Pair";
 import { Amount } from "./Amount";
+import type { Pair } from "./Pair";
 
 export interface Level {
-  price: Amount;
-  qty: Amount;
+	price: Amount;
+	qty: Amount;
 }
 
 export class Tick {
-  constructor(
-    private readonly pair: Pair,
-    private readonly asks: Level[],
-    private readonly bids: Level[]
-  ) {}
+	constructor(
+		public readonly pair: Pair,
+		public readonly asks: Level[],
+		public readonly bids: Level[],
+	) {}
 
-  public isForPair(targetPair: Pair): boolean {
-    return this.pair.isEquals(targetPair);
-  }
+	public isForPair(targetPair: Pair): boolean {
+		return this.pair.isEquals(targetPair);
+	}
 
-  public calculateCost(quantity: Amount): Amount {
-    // Apenas para testes antigos que precisam de um preço (usamos o melhor ask)
-    if (this.asks.length > 0 && this.asks[0]) {
-      return this.asks[0].price.multiplyBy(quantity);
-    }
-    return new Amount(0);
-  }
+	public calculateCost(quantity: Amount): Amount {
+		// Apenas para testes antigos que precisam de um preço (usamos o melhor ask)
+		if (this.asks.length > 0 && this.asks[0]) {
+			return this.asks[0].price.multiplyBy(quantity);
+		}
+		return new Amount(0);
+	}
 
-  // Comprando Base Asset gastando Quote Asset (VWAP)
-  public convertBuy(quoteAmount: Amount): Amount {
-    let quoteRemaining = 0;
-    quoteAmount.apply(v => quoteRemaining = v);
-    
-    let baseReceived = 0;
+	// Comprando Base Asset gastando Quote Asset (VWAP)
+	public convertBuy(quoteAmount: Amount): Amount {
+		let quoteRemaining = 0;
+		quoteAmount.apply((v) => (quoteRemaining = v));
 
-    for (const level of this.asks) {
-      let levelPrice = 0;
-      let levelQty = 0;
-      level.price.apply(v => levelPrice = v);
-      level.qty.apply(v => levelQty = v);
+		let baseReceived = 0;
 
-      const maxQuoteCanBuyHere = levelPrice * levelQty;
+		for (const level of this.asks) {
+			let levelPrice = 0;
+			let levelQty = 0;
+			level.price.apply((v) => (levelPrice = v));
+			level.qty.apply((v) => (levelQty = v));
 
-      if (quoteRemaining <= maxQuoteCanBuyHere) {
-        // Enchemos nossa ordem neste nível
-        baseReceived += quoteRemaining / levelPrice;
-        quoteRemaining = 0;
-        break;
-      } else {
-        // Compramos tudo que tem neste nível e vamos para o próximo
-        baseReceived += levelQty;
-        quoteRemaining -= maxQuoteCanBuyHere;
-      }
-    }
+			const maxQuoteCanBuyHere = levelPrice * levelQty;
 
-    // Se varremos todo o livro e ainda sobrou cota, significa que a corretora não tem liquidez.
-    // Retornamos 0 ou negativo para o MathEngine rejeitar sumariamente.
-    if (quoteRemaining > 0) {
-       return new Amount(-9999999);
-    }
+			if (quoteRemaining <= maxQuoteCanBuyHere) {
+				// Enchemos nossa ordem neste nível
+				baseReceived += quoteRemaining / levelPrice;
+				quoteRemaining = 0;
+				break;
+			} else {
+				// Compramos tudo que tem neste nível e vamos para o próximo
+				baseReceived += levelQty;
+				quoteRemaining -= maxQuoteCanBuyHere;
+			}
+		}
 
-    return new Amount(baseReceived);
-  }
+		// Se varremos todo o livro e ainda sobrou cota, significa que a corretora não tem liquidez.
+		// Retornamos 0 ou negativo para o MathEngine rejeitar sumariamente.
+		if (quoteRemaining > 0) {
+			return new Amount(-9999999);
+		}
 
-  // Vendendo Base Asset para receber Quote Asset (VWAP)
-  public convertSell(baseAmount: Amount): Amount {
-    let baseRemaining = 0;
-    baseAmount.apply(v => baseRemaining = v);
+		return new Amount(baseReceived);
+	}
 
-    let quoteReceived = 0;
+	// Vendendo Base Asset para receber Quote Asset (VWAP)
+	public convertSell(baseAmount: Amount): Amount {
+		let baseRemaining = 0;
+		baseAmount.apply((v) => (baseRemaining = v));
 
-    for (const level of this.bids) {
-      let levelPrice = 0;
-      let levelQty = 0;
-      level.price.apply(v => levelPrice = v);
-      level.qty.apply(v => levelQty = v);
+		let quoteReceived = 0;
 
-      if (baseRemaining <= levelQty) {
-        // Enchemos a nossa ordem neste nível
-        quoteReceived += baseRemaining * levelPrice;
-        baseRemaining = 0;
-        break;
-      } else {
-        // Vendemos tudo que tem neste nível e vamos para o próximo
-        quoteReceived += levelQty * levelPrice;
-        baseRemaining -= levelQty;
-      }
-    }
+		for (const level of this.bids) {
+			let levelPrice = 0;
+			let levelQty = 0;
+			level.price.apply((v) => (levelPrice = v));
+			level.qty.apply((v) => (levelQty = v));
 
-    // Se faltar liquidez, inviabilizamos o trade.
-    if (baseRemaining > 0) {
-      return new Amount(-9999999);
-    }
+			if (baseRemaining <= levelQty) {
+				// Enchemos a nossa ordem neste nível
+				quoteReceived += baseRemaining * levelPrice;
+				baseRemaining = 0;
+				break;
+			} else {
+				// Vendemos tudo que tem neste nível e vamos para o próximo
+				quoteReceived += levelQty * levelPrice;
+				baseRemaining -= levelQty;
+			}
+		}
 
-    return new Amount(quoteReceived);
-  }
+		// Se faltar liquidez, inviabilizamos o trade.
+		if (baseRemaining > 0) {
+			return new Amount(-9999999);
+		}
 
-  public applyBinanceSymbol(callback: (symbol: string) => void): void {
-    this.pair.applyBinanceSymbol(callback);
-  }
+		return new Amount(quoteReceived);
+	}
 
-  public applyTopAsk(callback: (level: Level | undefined) => void): void {
-    callback(this.asks.length > 0 ? this.asks[0] : undefined);
-  }
+	public applyBinanceSymbol(callback: (symbol: string) => void): void {
+		this.pair.applyBinanceSymbol(callback);
+	}
+
+	public applyTopAsk(callback: (level: Level | undefined) => void): void {
+		callback(this.asks.length > 0 ? this.asks[0] : undefined);
+	}
 }

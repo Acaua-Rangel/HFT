@@ -1,13 +1,13 @@
-import { Tick } from "../valueObjects/Tick";
+import type { Tick } from "../valueObjects/Tick";
 
 export class OrderBook {
-  private latestTick?: Tick;
+	private latestTick?: Tick;
 
-  public add(tick: Tick): void {
-    this.latestTick = tick;
-  }
+	public add(tick: Tick): void {
+		this.latestTick = tick;
+	}
 
-  public getLatest(): Tick | undefined {
-    return this.latestTick;
-  }
+	public getLatest(): Tick | undefined {
+		return this.latestTick;
+	}
 }
