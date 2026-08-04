@@ -20,18 +20,17 @@ class MockWsClient {
 }
 
 describe("BinanceBalanceFetcher", () => {
-  it("should return zero balances if wsClient is not ready", async () => {
+  it("should return empty map if wsClient is not ready", async () => {
     const mockClient = new MockWsClient();
     mockClient.ready = false;
     
     const fetcher = new BinanceBalanceFetcher(mockClient as any);
     const balances = await fetcher.fetchBalances();
     
-    expect((balances.brl as any).value).toBe(0);
-    expect((balances.bnb as any).value).toBe(0);
+    expect(balances.size).toBe(0);
   });
 
-  it("should parse and return BRL and BNB balances correctly", async () => {
+  it("should parse and return balances correctly as Map", async () => {
     const mockClient = new MockWsClient();
     mockClient.mockResponse = {
       status: 200,
@@ -39,7 +38,8 @@ describe("BinanceBalanceFetcher", () => {
         balances: [
           { asset: "BTC", free: "0.5" },
           { asset: "BRL", free: "950.45" },
-          { asset: "BNB", free: "2.5" }
+          { asset: "BNB", free: "2.5" },
+          { asset: "FDUSD", free: "0" } // Should be ignored because 0
         ]
       }
     };
@@ -47,29 +47,19 @@ describe("BinanceBalanceFetcher", () => {
     const fetcher = new BinanceBalanceFetcher(mockClient as any);
     const balances = await fetcher.fetchBalances();
     
-    expect((balances.brl as any).value).toBe(950.45);
-    expect((balances.bnb as any).value).toBe(2.5);
+    expect(balances.has("BTC")).toBe(true);
+    expect((balances.get("BTC") as any).value).toBe(0.5);
+    
+    expect(balances.has("BRL")).toBe(true);
+    expect((balances.get("BRL") as any).value).toBe(950.45);
+    
+    expect(balances.has("BNB")).toBe(true);
+    expect((balances.get("BNB") as any).value).toBe(2.5);
+    
+    expect(balances.has("FDUSD")).toBe(false);
   });
 
-  it("should return zero for missing assets in response", async () => {
-    const mockClient = new MockWsClient();
-    mockClient.mockResponse = {
-      status: 200,
-      result: {
-        balances: [
-          { asset: "BTC", free: "0.5" }
-        ]
-      }
-    };
-    
-    const fetcher = new BinanceBalanceFetcher(mockClient as any);
-    const balances = await fetcher.fetchBalances();
-    
-    expect((balances.brl as any).value).toBe(0);
-    expect((balances.bnb as any).value).toBe(0);
-  });
-
-  it("should return zero on API errors and not crash", async () => {
+  it("should return empty map on API errors and not crash", async () => {
     const mockClient = new MockWsClient();
     mockClient.mockResponse = {
       status: 400,
@@ -79,7 +69,6 @@ describe("BinanceBalanceFetcher", () => {
     const fetcher = new BinanceBalanceFetcher(mockClient as any);
     const balances = await fetcher.fetchBalances();
     
-    expect((balances.brl as any).value).toBe(0);
-    expect((balances.bnb as any).value).toBe(0);
+    expect(balances.size).toBe(0);
   });
 });

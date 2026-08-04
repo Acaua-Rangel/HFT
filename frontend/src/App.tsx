@@ -9,17 +9,7 @@ interface OrderBookEntry {
 
 // Removed synthetic generateOrderBook
 
-const formatCurrency = (value: number) => {
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-  }).format(value);
-};
 
-const formatNumber = (value: number) => {
-  return new Intl.NumberFormat('en-US').format(value);
-};
 
 const formatPrice = (value: number) => {
   return new Intl.NumberFormat('en-US', {
@@ -59,22 +49,69 @@ const PnlChart = ({ data }: { data: number[] }) => {
   );
 };
 
+
+const SkewGraph = ({ telemetry }: { telemetry: any }) => {
+  if (!telemetry || !telemetry.midPrice || telemetry.bid === 0) return (
+    <div className="skew-graph-empty">Waiting for telemetry...</div>
+  );
+  const { bid, ask, midPrice, q } = telemetry;
+  
+  // We represent the spread visually
+  const spread = ask - bid;
+  const halfSpread = spread / 2;
+  const maxView = halfSpread * 4; // visual scale
+  
+  // Center is midPrice
+  // Calculate percentage positions
+  const getPos = (price: number) => {
+    let p = ((price - (midPrice - maxView)) / (maxView * 2)) * 100;
+    return Math.max(0, Math.min(100, p));
+  };
+  
+  const bidPos = getPos(bid);
+  const askPos = getPos(ask);
+  const midPos = getPos(midPrice);
+  
+  const skewPercentage = (q * 100).toFixed(1);
+  const isVetoedBid = q > 0.4;
+  const isVetoedAsk = q < -0.4;
+
+  return (
+    <div className="skew-graph-container" style={{ padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
+      <div className="skew-graph-labels" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', fontSize: '12px', fontWeight: 'bold' }}>
+        <span style={{color: '#10b981'}}>Bid: {bid.toFixed(2)} {isVetoedBid ? '(VETO)' : ''}</span>
+        <span style={{color: '#888'}}>Mid: {midPrice.toFixed(2)}</span>
+        <span style={{color: '#ef4444'}}>Ask: {ask.toFixed(2)} {isVetoedAsk ? '(VETO)' : ''}</span>
+      </div>
+      <div className="skew-graph-track" style={{ position: 'relative', height: '20px', background: '#333', borderRadius: '10px', overflow: 'hidden' }}>
+        <div className="skew-center-line" style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: '2px', background: '#666', zIndex: 1 }}></div>
+        <div className="skew-mid-dot" style={{ position: 'absolute', left: `${midPos}%`, top: '50%', transform: 'translate(-50%, -50%)', width: '8px', height: '8px', borderRadius: '50%', background: '#fff', zIndex: 2 }}></div>
+        {!isVetoedBid && <div className="skew-bid-box" style={{ position: 'absolute', left: `${bidPos}%`, width: `${midPos - bidPos}%`, height: '100%', background: 'rgba(16, 185, 129, 0.5)' }}></div>}
+        {!isVetoedAsk && <div className="skew-ask-box" style={{ position: 'absolute', left: `${midPos}%`, width: `${askPos - midPos}%`, height: '100%', background: 'rgba(239, 68, 68, 0.5)' }}></div>}
+      </div>
+      <div className="skew-stats" style={{ marginTop: '10px', fontSize: '13px', textAlign: 'center' }}>
+        <span>Inventory Skew (q): <strong style={{color: Math.abs(q) > 0.3 ? '#ef4444' : '#10b981'}}>{skewPercentage}%</strong></span>
+      </div>
+    </div>
+  );
+};
+
 function App() {
+  const [gamma, setGamma] = useState<number>(0.1);
+  const [baseSpreadPct, setBaseSpreadPct] = useState<number>(0.001);
+  const [maxInventorySkew, setMaxInventorySkew] = useState<number>(0.4);
+  const [telemetry, setTelemetry] = useState<any>(null);
+  
   const [isRunning, setIsRunning] = useState(false);
   const [orderbook, setOrderbook] = useState<{ asks: OrderBookEntry[], bids: OrderBookEntry[] }>({ asks: [], bids: [] });
   const [pnl, setPnl] = useState<number | null>(null);
   const [pnlHistory, setPnlHistory] = useState<number[]>([]);
   const [latency, setLatency] = useState<number | null>(null);
-  const [volume, setVolume] = useState<number | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
-  const [pnlFlash, setPnlFlash] = useState<'flash-up' | 'flash-down' | ''>('');
   
   const [tradingMode, setTradingMode] = useState<"SIMULATION" | "LIVE">("SIMULATION");
-  const [simBalance, setSimBalance] = useState<number | null>(null);
   const [showLiveModal, setShowLiveModal] = useState(false);
   const [liveConfirmInput, setLiveConfirmInput] = useState("");
-  const [isEditingSimBalance, setIsEditingSimBalance] = useState(false);
-  const [simBalanceInput, setSimBalanceInput] = useState("");
   const [bnbDiscount, setBnbDiscount] = useState(false);
   const [activePair, setActivePair] = useState<string>("pepebrl");
   const [debouncedPair, setDebouncedPair] = useState<string>("pepebrl");
@@ -108,8 +145,6 @@ function App() {
             if (data.pnl !== undefined) {
               const newPnl = data.pnl;
               if (pnlRef.current !== null) {
-                if (newPnl > pnlRef.current) setPnlFlash('flash-up');
-                else if (newPnl < pnlRef.current) setPnlFlash('flash-down');
               }
               setPnl(newPnl);
               pnlRef.current = newPnl;
@@ -118,20 +153,25 @@ function App() {
                 if (newHistory.length > 200) newHistory.shift();
                 return newHistory;
               });
-              setTimeout(() => setPnlFlash(''), 300);
             }
             if (data.latency) setLatency(data.latency);
-            if (data.volume) setVolume(v => v + data.volume);
             if (data.balance !== undefined) setBalance(data.balance);
             if (data.mode !== undefined) setTradingMode(data.mode);
-            if (data.simBalance !== undefined) setSimBalance(data.simBalance);
             if (data.bestPair !== undefined) setActivePair(data.bestPair);
             if (data.isRunning !== undefined) setIsRunning(data.isRunning);
             if (data.errors !== undefined) setSystemErrors(data.errors);
+                        if (data.gamma !== undefined) setGamma(data.gamma);
+            if (data.baseSpreadPct !== undefined) setBaseSpreadPct(data.baseSpreadPct);
+            if (data.maxInventorySkew !== undefined) setMaxInventorySkew(data.maxInventorySkew);
             if (data.bnbDiscountLocked !== undefined) setBnbDiscountLocked(data.bnbDiscountLocked);
+                    } else if (data.type === 'TELEMETRY') {
+            setTelemetry(data);
+            if (data.gamma !== undefined) setGamma(data.gamma);
+            if (data.baseSpreadPct !== undefined) setBaseSpreadPct(data.baseSpreadPct);
+            if (data.maxInventorySkew !== undefined) setMaxInventorySkew(data.maxInventorySkew);
+            if (data.quoteBalance !== undefined) setBalance(data.quoteBalance);
           } else if (data.type === 'STATUS') {
             if (data.mode !== undefined) setTradingMode(data.mode);
-            if (data.simBalance !== undefined) setSimBalance(data.simBalance);
             if (data.realBalance !== undefined) setBalance(data.realBalance);
             if (data.isRunning !== undefined) setIsRunning(data.isRunning);
             if (data.bnbDiscount !== undefined) {
@@ -238,13 +278,6 @@ function App() {
     }
   };
 
-  const handleSimBalanceSubmit = () => {
-    const amount = parseFloat(simBalanceInput);
-    if (!isNaN(amount) && wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "SET_SIM_BALANCE", amount }));
-    }
-    setIsEditingSimBalance(false);
-  };
 
   return (
     <div className={`app-container ${tradingMode === 'LIVE' ? 'live-mode' : ''}`}>
@@ -346,57 +379,82 @@ function App() {
         </div>
       </header>
 
+      
+      <div className="mm-controls-panel glass-panel" style={{ margin: '20px', padding: '20px' }}>
+        <div className="panel-title" style={{ marginBottom: '15px' }}>⚡ Market Making Telemetry & Tuning</div>
+        
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', alignItems: 'center' }}>
+          <div>
+            <div className="control-group" style={{ marginBottom: '15px' }}>
+              <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span>Gamma (Risk Aversion):</span>
+                <strong>{gamma}</strong>
+              </label>
+              <input type="range" min="0" max="1" step="0.05" value={gamma} onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setGamma(val);
+                wsRef.current?.send(JSON.stringify({ type: "UPDATE_MM_PARAMS", gamma: val }));
+              }} style={{ width: '100%', accentColor: '#3b82f6' }} />
+            </div>
+            
+            <div className="control-group" style={{ marginBottom: '15px' }}>
+              <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span>Base Spread:</span>
+                <strong>{(baseSpreadPct * 100).toFixed(3)}%</strong>
+              </label>
+              <input type="range" min="0.0001" max="0.01" step="0.0001" value={baseSpreadPct} onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setBaseSpreadPct(val);
+                wsRef.current?.send(JSON.stringify({ type: "UPDATE_MM_PARAMS", baseSpreadPct: val }));
+              }} style={{ width: '100%', accentColor: '#3b82f6' }} />
+            </div>
+
+            <div className="control-group">
+              <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span>Max Inventory Skew:</span>
+                <strong>{(maxInventorySkew * 100).toFixed(0)}%</strong>
+              </label>
+              <input type="range" min="0.1" max="0.9" step="0.05" value={maxInventorySkew} onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setMaxInventorySkew(val);
+                wsRef.current?.send(JSON.stringify({ type: "UPDATE_MM_PARAMS", maxInventorySkew: val }));
+              }} style={{ width: '100%', accentColor: '#3b82f6' }} />
+            </div>
+          </div>
+          
+          <div className="telemetry-graph-wrapper">
+             <SkewGraph telemetry={telemetry} />
+          </div>
+        </div>
+      </div>
+
       <div className="metrics-row">
         <div className="glass-panel metric-card">
-          <div className="panel-title">Melhor Margem HFT (Multi-Cycle)</div>
-          <div className={`metric-value ${pnl !== null ? (pnl >= 0 ? 'positive' : 'negative') : ''} ${pnlFlash}`}>
-            {pnl !== null ? `${pnl >= 0 ? '+' : ''}${formatCurrency(pnl)}` : '--'}
+          <div className="panel-title">Inventory Skew (q)</div>
+          <div className={`metric-value ${telemetry?.q !== undefined && Math.abs(telemetry.q) > 0.3 ? 'negative' : 'positive'}`}>
+            {telemetry?.q !== undefined ? `${(telemetry.q * 100).toFixed(1)}%` : '--%'}
           </div>
         </div>
         <div className="glass-panel metric-card">
           <div className="panel-title">
-            {tradingMode === 'SIMULATION' ? 'BRL Balance (Simulated)' : 'BRL Balance (Live)'}
-            {tradingMode === 'SIMULATION' && (
-              <span className="edit-sim-balance" onClick={() => {
-                setIsEditingSimBalance(!isEditingSimBalance);
-                if (!isEditingSimBalance) setSimBalanceInput(simBalance?.toString() || "");
-              }}>
-                ✏️
-              </span>
-            )}
+            {tradingMode === 'SIMULATION' ? `Base Inventory (Sim ${telemetry?.baseSymbol || ''})` : `Base Inventory (Live ${telemetry?.baseSymbol || ''})`}
           </div>
           <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
-            {tradingMode === 'SIMULATION' ? (
-              isEditingSimBalance ? (
-                <div className="sim-balance-edit-container">
-                  <input 
-                    type="number" 
-                    className="sim-balance-edit"
-                    value={simBalanceInput} 
-                    onChange={e => setSimBalanceInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleSimBalanceSubmit()}
-                    autoFocus
-                  />
-                  <span className="sim-balance-confirm" onClick={handleSimBalanceSubmit}>✔️</span>
-                </div>
-              ) : (
-                simBalance !== null ? `R$ ${simBalance.toFixed(2)}` : '--'
-              )
-            ) : (
-              balance !== null ? `R$ ${balance.toFixed(2)}` : '--'
-            )}
+            {telemetry?.baseBalance !== undefined ? `${telemetry.baseBalance.toFixed(4)} ${telemetry.baseSymbol || ''}` : '--'}
+          </div>
+        </div>
+        <div className="glass-panel metric-card">
+          <div className="panel-title">
+            {tradingMode === 'SIMULATION' ? `Quote Balance (Sim ${telemetry?.quoteSymbol || ''})` : `Quote Balance (Live ${telemetry?.quoteSymbol || ''})`}
+          </div>
+          <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
+             {balance !== null ? `${balance.toFixed(2)}` : '--'}
           </div>
         </div>
         <div className="glass-panel metric-card">
           <div className="panel-title">Network Latency (NY4)</div>
           <div className="metric-value" style={{ color: latency !== null && latency < 10 ? 'var(--color-up)' : '#eab308' }}>
             {latency !== null ? `${latency}ms` : '--ms'}
-          </div>
-        </div>
-        <div className="glass-panel metric-card">
-          <div className="panel-title">Volume (Contracts)</div>
-          <div className="metric-value">
-            {volume !== null ? formatNumber(volume) : '--,---,---'}
           </div>
         </div>
       </div>

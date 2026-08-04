@@ -60,8 +60,8 @@ const mmCycle = new MarketMakerCycle(stateManager, circuitBreaker, inventoryMana
 
 // Define Target Pair
 const btc = new Currency("BTC");
-const fdusd = new Currency("FDUSD");
-const mmPair = new Pair(btc, fdusd);
+const brl = new Currency("BRL");
+const mmPair = new Pair(btc, brl);
 
 async function startHftEngine() {
     stateManager.registerPair(mmPair);
@@ -76,16 +76,23 @@ async function startHftEngine() {
             const balances = await balanceFetcher.fetchBalances();
             currentLatency = Date.now() - pingStart;
             
-            // Update Inventory Manager
-            balances.fdusd.apply((val) => inventoryManager.quoteBalance = val);
+            // Update Inventory Manager dynamically based on mmPair
+            let baseBal = 0;
+            let quoteBal = 0;
             
-            // Note: Currently balanceFetcher doesn't fetch BTC specifically unless it's in its hardcoded list.
-            // Assuming balanceFetcher fetches BTC, or we update it to fetch dynamically.
-            // If balanceFetcher only returns BRL, BNB, FDUSD, we must read BTC from dust or update fetcher.
-            // Let's assume balanceFetcher parses all assets and puts them in `balances.dust` or we add BTC.
-            let btcBal = 0;
-            if (balances.dust.has("BTC")) btcBal = balances.dust.get("BTC")!;
-            inventoryManager.baseBalance = btcBal;
+            mmPair.applyCurrencies((base, quote) => {
+                base.applySymbol((baseSym) => {
+                    const baseAmount = balances.get(baseSym);
+                    if (baseAmount) baseAmount.apply(val => baseBal = val);
+                });
+                quote.applySymbol((quoteSym) => {
+                    const quoteAmount = balances.get(quoteSym);
+                    if (quoteAmount) quoteAmount.apply(val => quoteBal = val);
+                });
+            });
+            
+            inventoryManager.baseBalance = baseBal;
+            inventoryManager.quoteBalance = quoteBal;
             
         } catch (err) {}
     }, 5000);
@@ -140,8 +147,16 @@ const server = Bun.serve({
                     isRunning: isEngineRunning,
                     baseBalance: inventoryManager.baseBalance,
                     quoteBalance: inventoryManager.quoteBalance,
+                    gamma: inventoryManager.GAMMA,
+                    baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
+                    maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
                     errors: latestErrors
                 }));
+            } else if (data.type === "UPDATE_MM_PARAMS") {
+                if (data.gamma !== undefined) inventoryManager.GAMMA = data.gamma;
+                if (data.baseSpreadPct !== undefined) inventoryManager.BASE_SPREAD_PCT = data.baseSpreadPct;
+                if (data.maxInventorySkew !== undefined) inventoryManager.MAX_INVENTORY_SKEW = data.maxInventorySkew;
+                console.log(`🔧 Updated MM Params: Gamma=${inventoryManager.GAMMA}, Spread=${inventoryManager.BASE_SPREAD_PCT}, MaxSkew=${inventoryManager.MAX_INVENTORY_SKEW}`);
             }
         } catch(e) {}
     },
@@ -154,4 +169,40 @@ const server = Bun.serve({
     }
   }
 });
+
+// Telemetry Broadcast Loop
+setInterval(() => {
+    const book = stateManager.retrieveOrderBook(mmPair);
+    if (!book) return;
+    const tick = book.getLatest();
+    if (!tick) return;
+    const midPriceAmount = tick.getMidPrice();
+    if (!midPriceAmount) return;
+    let midPrice = 0;
+    midPriceAmount.apply(v => midPrice = v);
+    if (midPrice <= 0) return;
+
+    const quotes = inventoryManager.getQuotes(midPrice);
+
+        let baseSym = ""; let quoteSym = "";
+    mmPair.applyCurrencies((b, q) => { b.applySymbol(s => baseSym = s); q.applySymbol(s => quoteSym = s); });
+
+    server.publish("dashboard", JSON.stringify({
+        type: "TELEMETRY",
+        midPrice,
+        bid: quotes.bid,
+        ask: quotes.ask,
+        q: quotes.q,
+        reservationPrice: quotes.reservationPrice,
+        baseBalance: inventoryManager.baseBalance,
+        quoteBalance: inventoryManager.quoteBalance,
+        baseSymbol: baseSym,
+        quoteSymbol: quoteSym,
+        gamma: inventoryManager.GAMMA,
+        baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
+        maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
+        latency: currentLatency
+    }));
+}, 1000);
+
 console.log(`🌐 WebSocket Server for Dashboard running on ws://localhost:${server.port}`);

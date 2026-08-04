@@ -9,7 +9,17 @@ export class Pair {
   public isEquals(other: Pair): boolean {
     const isBaseEquals = this.base.isEquals(other.base);
     const isQuoteEquals = this.quote.isEquals(other.quote);
-    return isBaseEquals && isQuoteEquals; // no else, and avoids multiple dots in one line
+    return isBaseEquals && isQuoteEquals; 
+  }
+
+  public toString(): string {
+    let result = "";
+    this.base.applySymbol(b => {
+        this.quote.applySymbol(q => {
+            result = `${b}/${q}`;
+        });
+    });
+    return result;
   }
 
   public applyBinanceStreamFormat(callback: (streamName: string) => void): void {
