@@ -236,15 +236,26 @@ export class CycleExecutor {
     console.error(`[${type}] ${message} (${pairs.toString()})`);
     
     // Convert TriangularPairs to Pair string format for the DB
-    const firstPair = pairs.getFirstTwoPairs().first;
-    const pairString = firstPair.getBase().asString() + firstPair.getQuote().asString();
+    const firstPair = pairs.pairTuple.first;
+    const pairString = firstPair.toString();
     
-    this.errorLogger.save(type, message, new Error().stack || "", pairString);
+    const { ErrorLogEntry, ErrorType, ErrorMessage, StackTrace, ErrorContext } = require("../infrastructure/database/ErrorLogRepository");
+    const crypto = require("crypto");
+    const { LogId, Timestamp } = require("../infrastructure/database/TransactionRepository");
+    const entry = new ErrorLogEntry(
+        new LogId(crypto.randomUUID()),
+        new Timestamp(Date.now()),
+        new ErrorType(type),
+        new ErrorMessage(message),
+        new StackTrace(new Error().stack || ""),
+        new ErrorContext(pairString)
+    );
+    this.errorRepo.save(entry);
   }
 
   // Helper method for fallback logic mapping
   public async testFallback(pairToRevert: Pair, amountVal: number, reason: string) {
-    const executor = this.executorFactory();
+    const executor = this.executorProvider();
     await this.executeFallbackIoc(executor, pairToRevert, amountVal, reason);
   }
 

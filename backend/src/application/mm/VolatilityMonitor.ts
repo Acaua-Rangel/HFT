@@ -10,15 +10,15 @@ export class VolatilityMonitor {
 
     constructor(private stateManager: LocalStateManager) {}
 
-    public shouldPause(pair: Pair): boolean {
+    public getVolatilityPercentage(pair: Pair): number {
         const book = this.stateManager.retrieveOrderBook(pair);
-        if (!book) return false;
+        if (!book) return 0;
         const latest = book.getLatest();
-        if (!latest) return false;
+        if (!latest) return 0;
         
         let mid = 0;
         const midPriceAmount = latest.getMidPrice();
-        if (!midPriceAmount) return false;
+        if (!midPriceAmount) return 0;
         midPriceAmount.apply((v: number) => mid = v);
         
         const now = Date.now();
@@ -26,17 +26,19 @@ export class VolatilityMonitor {
         this.priceHistory = this.priceHistory.filter(h => now - h.ts <= this.WINDOW_MS);
 
         if (this.priceHistory.length < 10) {
-            // Not enough data to determine volatility
-            return false;
+            return 0; // Not enough data
         }
 
         const prices = this.priceHistory.map(h => h.price);
         const mean = prices.reduce((a, b) => a + b, 0) / prices.length;
-        
         const variance = prices.reduce((acc, p) => acc + Math.pow(p - mean, 2), 0) / prices.length;
         const stddev = Math.sqrt(variance);
 
-        const volatilityPercentage = stddev / mean;
+        return stddev / mean;
+    }
+
+    public shouldPause(pair: Pair): boolean {
+        const volatilityPercentage = this.getVolatilityPercentage(pair);
         
         if (volatilityPercentage > this.THRESHOLD) {
             console.log(`⚠️ Volatility Monitor Veto: Volatility at ${(volatilityPercentage * 100).toFixed(4)}% (Limit: ${(this.THRESHOLD * 100).toFixed(4)}%)`);

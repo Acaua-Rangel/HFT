@@ -9,6 +9,8 @@ import { Pair } from "./src/domain/valueObjects/Pair";
 import { BinanceBalanceFetcher } from "./src/infrastructure/BinanceBalanceFetcher";
 import { BinanceWsClient } from "./src/infrastructure/BinanceWsClient";
 import { BinancePrecisionFetcher } from "./src/infrastructure/BinancePrecisionFetcher";
+import { SimulationOrderExecutor } from "./src/infrastructure/SimulationOrderExecutor";
+import { SimulationBalanceFetcher } from "./src/infrastructure/SimulationBalanceFetcher";
 
 // Market Making components
 import { VolatilityMonitor } from "./src/application/mm/VolatilityMonitor";
@@ -30,6 +32,7 @@ console.error = (...args) => {
 console.log("🚀 Starting HFT Market Making Engine...");
 
 let isEngineRunning = false;
+let currentMode: "LIVE" | "SIMULATION" = "SIMULATION"; // Default to SIMULATION for safety
 
 const dbPath = new DatabaseFilePath("./hft.sqlite");
 const db = DatabaseFactory.create(dbPath);
@@ -50,18 +53,41 @@ const precisionFetcher = new BinancePrecisionFetcher();
 
 let currentLatency = 0;
 const binanceExecutor = new BinanceOrderExecutor(globalWsClient, errorRepo, transactionRepo, precisionFetcher, stateManager);
+const simExecutor = new SimulationOrderExecutor(errorRepo, transactionRepo, precisionFetcher, stateManager);
+const simBalanceFetcher = new SimulationBalanceFetcher(simExecutor);
 
 const volatilityMonitor = new VolatilityMonitor(stateManager);
 const liquidityMonitor = new LiquidityMonitor(stateManager);
+let globalBnbBalance = 0;
+let isBnbDiscountLocked = false;
 const circuitBreaker = new CircuitBreaker(volatilityMonitor, liquidityMonitor, () => currentLatency);
 const inventoryManager = new InventoryManager();
 
-const mmCycle = new MarketMakerCycle(stateManager, circuitBreaker, inventoryManager, binanceExecutor);
+// Start in SIMULATION mode by default
+const mmCycle = new MarketMakerCycle(stateManager, circuitBreaker, inventoryManager, simExecutor);
 
 // Define Target Pair
 const btc = new Currency("BTC");
 const brl = new Currency("BRL");
 const mmPair = new Pair(btc, brl);
+
+// --- Mode Switching Logic ---
+function switchMode(newMode: "LIVE" | "SIMULATION", simQuoteBalance?: number) {
+    if (newMode === currentMode) return;
+
+    isEngineRunning = false; // Halt engine during switch
+    currentMode = newMode;
+
+    if (newMode === "SIMULATION") {
+        const initialQuote = simQuoteBalance ?? 1000;
+        simExecutor.setInitialBalances(0, initialQuote);
+        mmCycle.executor = simExecutor;
+        console.log(`🧪 Switched to SIMULATION mode (Quote: ${initialQuote})`);
+    } else {
+        mmCycle.executor = binanceExecutor;
+        console.log(`⚡ Switched to LIVE mode`);
+    }
+}
 
 async function startHftEngine() {
     stateManager.registerPair(mmPair);
@@ -69,27 +95,60 @@ async function startHftEngine() {
     
     await precisionFetcher.preloadPrecisions();
 
-    // Balance update loop
+    let quoteSym = "";
+    mmPair.applyCurrencies((b, q) => q.applySymbol(s => quoteSym = s.toUpperCase()));
+    const bnbPair = new Pair(new Currency("BNB"), new Currency(quoteSym));
+    if (quoteSym !== "BNB") {
+        stateManager.registerPair(bnbPair);
+        ingestor.subscribe(bnbPair);
+    }
+
+    // Initialize simulation with a default balance
+    simExecutor.setInitialBalances(0, 1000, 1.0); // 1.0 BNB by default to test lock
+
+    // Balance update loop — reads from the appropriate source based on mode
+    // Dedicated latency monitor (real ping to Binance API)
     setInterval(async () => {
         try {
-            const pingStart = Date.now();
-            const balances = await balanceFetcher.fetchBalances();
-            currentLatency = Date.now() - pingStart;
-            
-            // Update Inventory Manager dynamically based on mmPair
+            if (globalWsClient.isReady()) {
+                currentLatency = await globalWsClient.ping();
+            } else {
+                const start = Date.now();
+                await fetch("https://api.binance.com/api/v3/ping");
+                currentLatency = Date.now() - start;
+            }
+        } catch (err) {
+            // Ignore temporary network errors
+        }
+    }, 5000);
+
+    // Balance update loop (every 5s)
+    setInterval(async () => {
+        try {
             let baseBal = 0;
             let quoteBal = 0;
-            
-            mmPair.applyCurrencies((base, quote) => {
-                base.applySymbol((baseSym) => {
-                    const baseAmount = balances.get(baseSym);
-                    if (baseAmount) baseAmount.apply(val => baseBal = val);
+
+            if (currentMode === "LIVE") {
+                const balances = await balanceFetcher.fetchBalances();
+                
+                mmPair.applyCurrencies((base, quote) => {
+                    base.applySymbol((baseSym) => {
+                        const baseAmount = balances.get(baseSym);
+                        if (baseAmount) baseAmount.apply(val => baseBal = val);
+                    });
+                    quote.applySymbol((quoteSym) => {
+                        const quoteAmount = balances.get(quoteSym);
+                        if (quoteAmount) quoteAmount.apply(val => quoteBal = val);
+                    });
                 });
-                quote.applySymbol((quoteSym) => {
-                    const quoteAmount = balances.get(quoteSym);
-                    if (quoteAmount) quoteAmount.apply(val => quoteBal = val);
-                });
-            });
+                const bnbAmount = balances.get("BNB");
+                if (bnbAmount) bnbAmount.apply(val => globalBnbBalance = val);
+            } else {
+                // SIMULATION: read virtual balances from SimulationOrderExecutor
+                baseBal = simExecutor.baseBalance;
+                quoteBal = simExecutor.quoteBalance;
+                globalBnbBalance = simExecutor.bnbBalance;
+            }
             
             inventoryManager.baseBalance = baseBal;
             inventoryManager.quoteBalance = quoteBal;
@@ -105,7 +164,42 @@ async function startHftEngine() {
 
         await evaluationLock.runIfUnlocked(async () => {
             try {
-                await mmCycle.executeTick(mmPair);
+                let quoteSym = "";
+                mmPair.applyCurrencies((b, q) => { q.applySymbol(s => quoteSym = s.toUpperCase()); });
+                
+                // BNB Fee Protection Calculation
+                if (quoteSym !== "BNB") {
+                    let bnbQuotePrice = 0;
+                    const bnbPairObj = new Pair(new Currency("BNB"), new Currency(quoteSym));
+                    const bnbBook = stateManager.retrieveOrderBook(bnbPairObj);
+                    if (bnbBook) {
+                        const bnbTick = bnbBook.getLatest();
+                        if (bnbTick) bnbTick.getMidPrice()?.apply(v => bnbQuotePrice = v);
+                    }
+
+                    if (bnbQuotePrice > 0) {
+                        const baseLotQuote = mmCycle.lotConfig.mode === "PERCENTAGE" 
+                            ? inventoryManager.quoteBalance * mmCycle.lotConfig.value 
+                            : mmCycle.lotConfig.value;
+                        // Estimate fee for 1 Buy and 1 Sell
+                        const estimatedQuoteFee = (baseLotQuote * 2) * 0.00075; 
+                        const bnbRequired = estimatedQuoteFee / bnbQuotePrice;
+                        
+                        if (bnbRequired > globalBnbBalance) {
+                            simExecutor.bnbDiscountEnabled = false;
+                            // TODO: Add live executor toggle if needed
+                            isBnbDiscountLocked = true;
+                        } else {
+                            isBnbDiscountLocked = false;
+                        }
+                    }
+                }
+                
+                const bnbEnabled = simExecutor.bnbDiscountEnabled;
+                const feeRate = quoteSym === "FDUSD" ? 0 : (bnbEnabled ? 0.00075 : 0.001);
+                const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
+
+                await mmCycle.executeTick(mmPair, feeRate, volatilityPct);
             } catch (err) {
                 console.error("MM Loop Error:", err);
             }
@@ -119,6 +213,7 @@ async function startHftEngine() {
 
     console.log("✅ Initialization Complete.");
     console.log(`📡 Quoting ${mmPair.toString()} on Market Maker Loop...`);
+    console.log(`🧪 Starting in SIMULATION mode (safe default)`);
 }
 
 startHftEngine().catch(e => {
@@ -126,7 +221,7 @@ startHftEngine().catch(e => {
     process.exit(1);
 });
 
-// Mock Server for Dashboard compatibility
+// WebSocket Server for Dashboard
 const server = Bun.serve({
   port: 3000,
   fetch(req, server) {
@@ -140,23 +235,67 @@ const server = Bun.serve({
             if (data.type === "TOGGLE_ENGINE") {
                 isEngineRunning = data.running === true;
                 console.log(`Engine running state: ${isEngineRunning ? 'ACTIVE 🟢' : 'HALTED 🔴'}`);
-            } else if (data.type === "GET_STATUS") {
-                ws.send(JSON.stringify({
+            } else if (data.type === "TOGGLE_MODE") {
+                const newMode = data.mode === "LIVE" ? "LIVE" : "SIMULATION";
+                switchMode(newMode, data.simBalance);
+                // Broadcast updated status to all clients
+                server.publish("dashboard", JSON.stringify({
                     type: "STATUS",
-                    mode: "LIVE",
+                    mode: currentMode,
                     isRunning: isEngineRunning,
                     baseBalance: inventoryManager.baseBalance,
                     quoteBalance: inventoryManager.quoteBalance,
                     gamma: inventoryManager.GAMMA,
                     baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
                     maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
-                    errors: latestErrors
+                    errors: latestErrors,
+                    lotMode: mmCycle.lotConfig.mode,
+                    lotValue: mmCycle.lotConfig.value,
+                    bnbDiscountLocked: isBnbDiscountLocked,
+                    bnbBalance: globalBnbBalance
+                }));
+            } else if (data.type === "SET_SIM_BALANCE") {
+                if (currentMode === "SIMULATION" && data.quoteBalance !== undefined) {
+                    simExecutor.setInitialBalances(simExecutor.baseBalance, data.quoteBalance, simExecutor.bnbBalance);
+                    inventoryManager.quoteBalance = data.quoteBalance;
+                    console.log(`🧪 [SIM] Quote balance updated to: ${data.quoteBalance}`);
+                }
+            } else if (data.type === "SET_SIM_BNB_BALANCE") {
+                if (currentMode === "SIMULATION" && data.bnbBalance !== undefined) {
+                    simExecutor.setBnbBalance(data.bnbBalance);
+                    globalBnbBalance = data.bnbBalance;
+                    console.log(`🧪 [SIM] BNB balance updated to: ${data.bnbBalance}`);
+                }
+            } else if (data.type === "GET_STATUS") {
+                ws.send(JSON.stringify({
+                    type: "STATUS",
+                    mode: currentMode,
+                    isRunning: isEngineRunning,
+                    baseBalance: inventoryManager.baseBalance,
+                    quoteBalance: inventoryManager.quoteBalance,
+                    gamma: inventoryManager.GAMMA,
+                    baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
+                    maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
+                    errors: latestErrors,
+                    lotMode: mmCycle.lotConfig.mode,
+                    lotValue: mmCycle.lotConfig.value,
+                    bnbDiscountLocked: isBnbDiscountLocked,
+                    bnbBalance: globalBnbBalance
                 }));
             } else if (data.type === "UPDATE_MM_PARAMS") {
                 if (data.gamma !== undefined) inventoryManager.GAMMA = data.gamma;
                 if (data.baseSpreadPct !== undefined) inventoryManager.BASE_SPREAD_PCT = data.baseSpreadPct;
                 if (data.maxInventorySkew !== undefined) inventoryManager.MAX_INVENTORY_SKEW = data.maxInventorySkew;
                 console.log(`🔧 Updated MM Params: Gamma=${inventoryManager.GAMMA}, Spread=${inventoryManager.BASE_SPREAD_PCT}, MaxSkew=${inventoryManager.MAX_INVENTORY_SKEW}`);
+            } else if (data.type === "UPDATE_LOT_CONFIG") {
+                if (data.mode !== undefined) mmCycle.lotConfig.mode = data.mode;
+                if (data.value !== undefined) mmCycle.lotConfig.value = data.value;
+                console.log(`🔧 Updated Lot Config: Mode=${mmCycle.lotConfig.mode}, Value=${mmCycle.lotConfig.value}`);
+            } else if (data.type === "SET_BNB_DISCOUNT") {
+                if (!isBnbDiscountLocked) {
+                    simExecutor.bnbDiscountEnabled = data.enabled === true;
+                    console.log(`🧪 [SIM] BNB Discount: ${simExecutor.bnbDiscountEnabled ? 'ON (-25% fee)' : 'OFF (standard fee)'}`);
+                }
             }
         } catch(e) {}
     },
@@ -182,13 +321,30 @@ setInterval(() => {
     midPriceAmount.apply(v => midPrice = v);
     if (midPrice <= 0) return;
 
-    const quotes = inventoryManager.getQuotes(midPrice);
-
-        let baseSym = ""; let quoteSym = "";
+    let baseSym = ""; let quoteSym = "";
     mmPair.applyCurrencies((b, q) => { b.applySymbol(s => baseSym = s); q.applySymbol(s => quoteSym = s); });
+
+    const bnbEnabled = simExecutor.bnbDiscountEnabled;
+    const feeRate = quoteSym === "FDUSD" ? 0 : (bnbEnabled ? 0.00075 : 0.001);
+    const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
+
+    const quotes = inventoryManager.getQuotes(midPrice, feeRate, volatilityPct);
+
+    let bnbPrice = 0;
+    if (quoteSym !== "BNB") {
+        const bnbPairObj = new Pair(new Currency("BNB"), new Currency(quoteSym));
+        const bnbBook = stateManager.retrieveOrderBook(bnbPairObj);
+        if (bnbBook) {
+            const bnbTick = bnbBook.getLatest();
+            if (bnbTick) bnbTick.getMidPrice()?.apply(v => bnbPrice = v);
+        }
+    } else {
+        bnbPrice = 1.0;
+    }
 
     server.publish("dashboard", JSON.stringify({
         type: "TELEMETRY",
+        mode: currentMode,
         midPrice,
         bid: quotes.bid,
         ask: quotes.ask,
@@ -196,12 +352,23 @@ setInterval(() => {
         reservationPrice: quotes.reservationPrice,
         baseBalance: inventoryManager.baseBalance,
         quoteBalance: inventoryManager.quoteBalance,
+        bnbBalance: globalBnbBalance,
+        bnbPrice: bnbPrice,
         baseSymbol: baseSym,
         quoteSymbol: quoteSym,
         gamma: inventoryManager.GAMMA,
         baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
         maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
-        latency: currentLatency
+        latency: currentLatency,
+        bnbDiscount: simExecutor.bnbDiscountEnabled,
+        totalFees: simExecutor.totalFeesCollected,
+        effectiveSpread: quotes.effectiveSpread,
+        minSpreadFloor: quotes.minSpreadFloor,
+        volatilityPct: volatilityPct,
+        lotMode: mmCycle.lotConfig.mode,
+        lotValue: mmCycle.lotConfig.value,
+        effectiveBuyLot: mmCycle.currentEffectiveBuyLotQuote,
+        effectiveSellLot: mmCycle.currentEffectiveSellLotQuote
     }));
 }, 1000);
 

@@ -100,6 +100,20 @@ export class BinanceWsClient {
     return this.sendRequestInternal(req, timeoutMs);
   }
 
+  public async ping(timeoutMs: number = 3000): Promise<number> {
+    if (!this.isReady()) {
+      throw new Error("Cannot send ping: WebSocket is not connected");
+    }
+    const start = Date.now();
+    const req: WsRequest = {
+      id: crypto.randomUUID(),
+      method: "ping",
+      params: {}
+    };
+    await this.sendRequestInternal(req, timeoutMs);
+    return Date.now() - start;
+  }
+
   private sendRequestInternal(req: WsRequest, timeoutMs: number): Promise<WsResponse> {
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {

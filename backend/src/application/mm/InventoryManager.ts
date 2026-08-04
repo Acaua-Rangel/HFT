@@ -9,7 +9,7 @@ export class InventoryManager {
 
     constructor() {}
 
-    public getQuotes(midPrice: number): { bid: number, ask: number, bidEnabled: boolean, askEnabled: boolean, q: number, reservationPrice: number } {
+    public getQuotes(midPrice: number, feeRate: number = 0.001, volatilityPct: number = 0): { bid: number, ask: number, bidEnabled: boolean, askEnabled: boolean, q: number, reservationPrice: number, effectiveSpread: number, minSpreadFloor: number } {
         const baseWealth = this.baseBalance * midPrice;
         const totalWealth = baseWealth + this.quoteBalance;
 
@@ -32,14 +32,45 @@ export class InventoryManager {
             }
         }
 
-        // Scaled gamma so that maximum q (0.5) with gamma 0.1 results in a 0.5% price skew.
-        const scaledGamma = this.GAMMA * 0.1; 
-        const reservationPrice = midPrice - (q * scaledGamma * midPrice);
+        // 1. Fee-Aware Dynamic Floor
+        const minSpreadFloor = feeRate > 0 ? 2 * feeRate * 1.5 : 0;
 
-        const halfSpread = (midPrice * this.BASE_SPREAD_PCT) / 2;
-        const bid = reservationPrice - halfSpread;
-        const ask = reservationPrice + halfSpread;
+        // 2. Volatility-Adjusted Spread
+        const baselineVol = 0.001; 
+        let volatilityMultiplier = 1;
+        if (volatilityPct > baselineVol) {
+            volatilityMultiplier = 1 + ((volatilityPct - baselineVol) / baselineVol);
+        }
+        
+        const effectiveSpread = Math.max(this.BASE_SPREAD_PCT, minSpreadFloor) * volatilityMultiplier;
+        const baseHalfSpread = effectiveSpread / 2;
 
-        return { bid, ask, bidEnabled, askEnabled, q, reservationPrice };
+        // 3. Asymmetric Spread Adjustment
+        let bidDistance = baseHalfSpread;
+        let askDistance = baseHalfSpread;
+        
+        // We use GAMMA * 10 as a scaler so that GAMMA 0.1 -> 1x multiplier per max q(0.5)
+        const skewScaler = this.GAMMA * 10;
+
+        if (q > 0) {
+            // Long base asset: Widen bid (harder to buy), tighten ask (easier to sell)
+            bidDistance = baseHalfSpread * (1 + q * skewScaler);
+            askDistance = Math.max(minSpreadFloor / 2, baseHalfSpread * (1 - q * skewScaler));
+        } else if (q < 0) {
+            // Short base asset: Tighten bid (easier to buy), widen ask (harder to sell)
+            bidDistance = Math.max(minSpreadFloor / 2, baseHalfSpread * (1 - Math.abs(q) * skewScaler));
+            askDistance = baseHalfSpread * (1 + Math.abs(q) * skewScaler);
+        }
+
+        bidDistance = Math.max(0, bidDistance);
+        askDistance = Math.max(0, askDistance);
+
+        const bid = midPrice * (1 - bidDistance);
+        const ask = midPrice * (1 + askDistance);
+
+        // Keeping reservationPrice logic compatible (just pseudo-mid for telemetry if needed)
+        const reservationPrice = midPrice * (1 - q * this.GAMMA * 0.1); 
+
+        return { bid, ask, bidEnabled, askEnabled, q, reservationPrice, effectiveSpread, minSpreadFloor };
     }
 }
