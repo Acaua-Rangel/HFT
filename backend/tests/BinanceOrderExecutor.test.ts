@@ -1,284 +1,213 @@
-import { describe, expect, test } from "bun:test";
-import { Amount } from "../src/domain/valueObjects/Amount";
-import { Currency } from "../src/domain/valueObjects/Currency";
-import { Pair } from "../src/domain/valueObjects/Pair";
+import { test, expect, describe, mock } from "bun:test";
 import { BinanceOrderExecutor } from "../src/infrastructure/BinanceOrderExecutor";
-import {
-	BinanceWsClient,
-	type WsResponse,
-} from "../src/infrastructure/BinanceWsClient";
+import { BinanceWsClient, WsResponse, WsRequest } from "../src/infrastructure/BinanceWsClient";
 import { ExecutionRateLimiter } from "../src/infrastructure/ExecutionRateLimiter";
+import { Pair } from "../src/domain/valueObjects/Pair";
+import { Currency } from "../src/domain/valueObjects/Currency";
+import { Amount } from "../src/domain/valueObjects/Amount";
+import { OrderFill } from "../src/domain/valueObjects/OrderFill";
 
 // Mock Repositories
 class MockErrorLogRepository {
-	public errors: any[] = [];
-	save(entry: any) {
-		this.errors.push(entry);
-	}
+  public errors: any[] = [];
+  save(entry: any) {
+    this.errors.push(entry);
+  }
 }
 
 class MockTransactionRepository {
-	save(_entry: any) {}
+  save(entry: any) {}
 }
 
 class MockPrecisionFetcher {
-	getQuantityDecimals(symbol: string): number {
-		if (symbol.includes("BTC")) return 5;
-		if (symbol.includes("ETH")) return 4;
-		return 0; // Meme coins
-	}
+  getQuantityDecimals(symbol: string): number {
+    if (symbol.includes("BTC")) return 5;
+    if (symbol.includes("ETH")) return 4;
+    return 0; // Meme coins
+  }
 }
 
 // Mock WebSocket Client
 class MockWsClient extends BinanceWsClient {
-	public ready = true;
-	public simulateFailure = false;
-	public simulateTimeout = false;
-	public lastParams: any = null;
+  public ready = true;
+  public simulateFailure = false;
+  public simulateTimeout = false;
+  public lastParams: any = null;
+  
+  constructor() {
+    super("key", "secret");
+  }
 
-	constructor() {
-		super("key", "secret");
-	}
-
-	public override isReady(): boolean {
-		return this.ready;
-	}
-
-	public override async connect(): Promise<void> {}
-	public async ensureConnected(): Promise<void> {}
-
-	public override async sendRequest(
-		_method: string,
-		params: any,
-		_timeoutMs: number = 3000,
-	): Promise<WsResponse> {
-		this.lastParams = params;
-		if (!this.ready) {
-			throw new Error("Socket disconnected");
-		}
-		if (this.simulateTimeout) {
-			return new Promise((_, reject) => {
-				setTimeout(() => reject(new Error("Timeout")), 50);
-			});
-		}
-		if (this.simulateFailure) {
-			return {
-				id: "mock-id",
-				status: 400,
-				result: {},
-				error: { code: -1013, msg: "Filter failure: LOT_SIZE" },
-			};
-		}
-		const baseAsset = params.symbol
-			? params.symbol.replace(/USDT|BRL|BTC/, "")
-			: "BTC";
-
-		return {
-			id: "mock-id",
-			status: 200,
-			result: {
-				executedQty: "10.0",
-				cummulativeQuoteQty: "50000.0",
-				fills: [
-					{
-						price: "5000.0",
-						qty: "10.0",
-						commission: "0.01",
-						commissionAsset: baseAsset,
-					},
-				],
-			},
-		};
-	}
+  public override isReady(): boolean {
+    return this.ready;
+  }
+  
+  public async ensureConnected(): Promise<void> {}
+  
+  public override async sendRequest(method: string, params: any, timeoutMs: number = 3000): Promise<WsResponse> {
+    this.lastParams = params;
+    if (!this.ready) {
+      throw new Error("Socket disconnected");
+    }
+    if (this.simulateTimeout) {
+      return new Promise((_, reject) => {
+        setTimeout(() => reject(new Error("Timeout")), 50);
+      });
+    }
+    if (this.simulateFailure) {
+      return {
+        id: "mock-id",
+        status: 400,
+        result: {},
+        error: { code: -1013, msg: "Filter failure: LOT_SIZE" }
+      };
+    }
+    const baseAsset = params.symbol ? params.symbol.replace(/USDT|BRL|BTC/, "") : "BTC";
+    
+    return {
+      id: "mock-id",
+      status: 200,
+      result: {
+        executedQty: "10.0",
+        cummulativeQuoteQty: "50000.0",
+        fills: [
+          {
+            price: "5000.0",
+            qty: "10.0",
+            commission: "0.01",
+            commissionAsset: baseAsset
+          }
+        ]
+      }
+    };
+  }
 }
 
 describe("BinanceOrderExecutor Logic Tests", () => {
-	const pair = new Pair(new Currency("BTC"), new Currency("BRL"));
-	const amount = new Amount(100);
+  const pair = new Pair(new Currency("BTC"), new Currency("BRL"));
+  const amount = new Amount(100);
 
-	test("Rate Limiter - Should prevent execution if limit exceeded", async () => {
-		const errRepo = new MockErrorLogRepository();
-		const txRepo = new MockTransactionRepository();
-		const precisionFetcher = new MockPrecisionFetcher();
+  test("Rate Limiter - Should prevent execution if limit exceeded", async () => {
+    const errRepo = new MockErrorLogRepository();
+    const txRepo = new MockTransactionRepository();
+    const precisionFetcher = new MockPrecisionFetcher();
+    
+    const mockClient = new MockWsClient();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, txRepo as any, precisionFetcher as any);
 
-		const mockClient = new MockWsClient();
-		const executor = new BinanceOrderExecutor(
-			mockClient,
-			errRepo as any,
-			txRepo as any,
-			precisionFetcher as any,
-		);
+    // Configure rate limiter to allow ONLY 2 orders
+    const rateLimiter = new ExecutionRateLimiter(2, 10000); 
+    executor.forceInjectWsClientForTests(mockClient, rateLimiter);
 
-		// Configure rate limiter to allow ONLY 2 orders
-		const rateLimiter = new ExecutionRateLimiter(2, 10000);
-		executor.forceInjectWsClientForTests(mockClient, rateLimiter);
+    // 1st order - Should pass
+    const fill1 = await executor.executeMarketBuy(pair, amount);
+    let success1 = false; fill1.apply((q, qq, p, s) => { success1 = s; });
+    expect(success1).toBe(true);
 
-		// 1st order - Should pass
-		const fill1 = await executor.executeMarketBuy(pair, amount);
-		let success1 = false;
-		fill1.apply((_q, _qq, _p, s) => {
-			success1 = s;
-		});
-		expect(success1).toBe(true);
+    // 2nd order - Should pass
+    const fill2 = await executor.executeMarketBuy(pair, amount);
+    let success2 = false; fill2.apply((q, qq, p, s) => { success2 = s; });
+    expect(success2).toBe(true);
 
-		// 2nd order - Should pass
-		const fill2 = await executor.executeMarketBuy(pair, amount);
-		let success2 = false;
-		fill2.apply((_q, _qq, _p, s) => {
-			success2 = s;
-		});
-		expect(success2).toBe(true);
+    // 3rd order - Should FAIL due to rate limit
+    const fill3 = await executor.executeMarketBuy(pair, amount);
+    let success3 = false; fill3.apply((q, qq, p, s) => { success3 = s; });
+    expect(success3).toBe(false);
 
-		// 3rd order - Should FAIL due to rate limit
-		const fill3 = await executor.executeMarketBuy(pair, amount);
-		let success3 = false;
-		fill3.apply((_q, _qq, _p, s) => {
-			success3 = s;
-		});
-		expect(success3).toBe(false);
+    // Check if error was logged
+    expect(errRepo.errors.length).toBe(1);
+    expect(errRepo.errors[0].errorType.value).toBe("RATE_LIMIT");
+  });
 
-		// Check if error was logged
-		expect(errRepo.errors.length).toBe(1);
-		expect(errRepo.errors[0].errorType.value).toBe("RATE_LIMIT");
-	});
+  test("WebSocket Drops - Should fail gracefully when disconnected mid-execution", async () => {
+    const errRepo = new MockErrorLogRepository();
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    
+    const rateLimiter = new ExecutionRateLimiter(50, 10000);
+    executor.forceInjectWsClientForTests(mockClient, rateLimiter);
 
-	test("WebSocket Drops - Should fail gracefully when disconnected mid-execution", async () => {
-		const errRepo = new MockErrorLogRepository();
-		const mockClient = new MockWsClient();
-		const precisionFetcher = new MockPrecisionFetcher();
-		const executor = new BinanceOrderExecutor(
-			mockClient,
-			errRepo as any,
-			new MockTransactionRepository() as any,
-			precisionFetcher as any,
-		);
+    // Simulate connection drop
+    mockClient.ready = false;
 
-		const rateLimiter = new ExecutionRateLimiter(50, 10000);
-		executor.forceInjectWsClientForTests(mockClient, rateLimiter);
+    const fill = await executor.executeMarketBuy(pair, amount);
+    let success = false; fill.apply((q, qq, p, s) => { success = s; });
+    
+    expect(success).toBe(false);
+    // Should not consume rate limit if not ready
+    expect(rateLimiter.hasCapacityFor(50)).toBe(true);
+  });
 
-		// Simulate connection drop
-		mockClient.ready = false;
+  test("Execution Error - Should fail gracefully on Binance rejection", async () => {
+    const errRepo = new MockErrorLogRepository();
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    
+    mockClient.simulateFailure = true;
+    const rateLimiter = new ExecutionRateLimiter(50, 10000);
+    executor.forceInjectWsClientForTests(mockClient, rateLimiter);
 
-		const fill = await executor.executeMarketBuy(pair, amount);
-		let success = false;
-		fill.apply((_q, _qq, _p, s) => {
-			success = s;
-		});
+    const fill = await executor.executeMarketBuy(pair, amount);
+    let success = false; fill.apply((q, qq, p, s) => { success = s; });
+    
+    expect(success).toBe(false);
+    expect(errRepo.errors.length).toBe(1);
+    expect(errRepo.errors[0].errorType.value).toBe("ORDER_REJECTED");
+  });
 
-		expect(success).toBe(false);
-		// Should not consume rate limit if not ready
-		expect(rateLimiter.hasCapacityFor(50)).toBe(true);
-	});
+  test("Timeout Tolerance - Should fail gracefully on timeout", async () => {
+    const errRepo = new MockErrorLogRepository();
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    
+    mockClient.simulateTimeout = true;
+    const rateLimiter = new ExecutionRateLimiter(50, 10000);
+    executor.forceInjectWsClientForTests(mockClient, rateLimiter);
 
-	test("Execution Error - Should fail gracefully on Binance rejection", async () => {
-		const errRepo = new MockErrorLogRepository();
-		const mockClient = new MockWsClient();
-		const precisionFetcher = new MockPrecisionFetcher();
-		const executor = new BinanceOrderExecutor(
-			mockClient,
-			errRepo as any,
-			new MockTransactionRepository() as any,
-			precisionFetcher as any,
-		);
+    const fill = await executor.executeMarketBuy(pair, amount);
+    let success = false; fill.apply((q, qq, p, s) => { success = s; });
+    
+    expect(success).toBe(false);
+    expect(errRepo.errors.length).toBe(1);
+    expect(errRepo.errors[0].errorType.value).toBe("ORDER_FAILED");
+  });
 
-		mockClient.simulateFailure = true;
-		const rateLimiter = new ExecutionRateLimiter(50, 10000);
-		executor.forceInjectWsClientForTests(mockClient, rateLimiter);
+  test("Precision - Should use 5 decimals for BTC quantity on Sell", async () => {
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
 
-		const fill = await executor.executeMarketBuy(pair, amount);
-		let success = false;
-		fill.apply((_q, _qq, _p, s) => {
-			success = s;
-		});
+    const btcPair = new Pair(new Currency("BTC"), new Currency("USDT"));
+    await executor.executeMarketSell(btcPair, new Amount(1.12345678));
 
-		expect(success).toBe(false);
-		expect(errRepo.errors.length).toBe(1);
-		expect(errRepo.errors[0].errorType.value).toBe("ORDER_REJECTED");
-	});
+    expect(mockClient.lastParams.quantity).toBe("1.12345");
+  });
 
-	test("Timeout Tolerance - Should fail gracefully on timeout", async () => {
-		const errRepo = new MockErrorLogRepository();
-		const mockClient = new MockWsClient();
-		const precisionFetcher = new MockPrecisionFetcher();
-		const executor = new BinanceOrderExecutor(
-			mockClient,
-			errRepo as any,
-			new MockTransactionRepository() as any,
-			precisionFetcher as any,
-		);
+  test("Precision - Should use 4 decimals for ETH quantity on Sell", async () => {
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
 
-		mockClient.simulateTimeout = true;
-		const rateLimiter = new ExecutionRateLimiter(50, 10000);
-		executor.forceInjectWsClientForTests(mockClient, rateLimiter);
+    const ethPair = new Pair(new Currency("ETH"), new Currency("USDT"));
+    await executor.executeMarketSell(ethPair, new Amount(1.12345678));
 
-		const fill = await executor.executeMarketBuy(pair, amount);
-		let success = false;
-		fill.apply((_q, _qq, _p, s) => {
-			success = s;
-		});
+    expect(mockClient.lastParams.quantity).toBe("1.1234");
+  });
 
-		expect(success).toBe(false);
-		expect(errRepo.errors.length).toBe(1);
-		expect(errRepo.errors[0].errorType.value).toBe("ORDER_FAILED");
-	});
+  test("Precision - Should use 0 decimals for MEME quantity on Sell", async () => {
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
 
-	test("Precision - Should use 5 decimals for BTC quantity on Sell", async () => {
-		const mockClient = new MockWsClient();
-		const precisionFetcher = new MockPrecisionFetcher();
-		const executor = new BinanceOrderExecutor(
-			mockClient,
-			new MockErrorLogRepository() as any,
-			new MockTransactionRepository() as any,
-			precisionFetcher as any,
-		);
-		executor.forceInjectWsClientForTests(
-			mockClient,
-			new ExecutionRateLimiter(50, 10000),
-		);
+    const pepePair = new Pair(new Currency("PEPE"), new Currency("USDT"));
+    await executor.executeMarketSell(pepePair, new Amount(154032.403));
 
-		const btcPair = new Pair(new Currency("BTC"), new Currency("USDT"));
-		await executor.executeMarketSell(btcPair, new Amount(1.12345678));
-
-		expect(mockClient.lastParams.quantity).toBe("1.12345");
-	});
-
-	test("Precision - Should use 4 decimals for ETH quantity on Sell", async () => {
-		const mockClient = new MockWsClient();
-		const precisionFetcher = new MockPrecisionFetcher();
-		const executor = new BinanceOrderExecutor(
-			mockClient,
-			new MockErrorLogRepository() as any,
-			new MockTransactionRepository() as any,
-			precisionFetcher as any,
-		);
-		executor.forceInjectWsClientForTests(
-			mockClient,
-			new ExecutionRateLimiter(50, 10000),
-		);
-
-		const ethPair = new Pair(new Currency("ETH"), new Currency("USDT"));
-		await executor.executeMarketSell(ethPair, new Amount(1.12345678));
-
-		expect(mockClient.lastParams.quantity).toBe("1.1234");
-	});
-
-	test("Precision - Should use 0 decimals for MEME quantity on Sell", async () => {
-		const mockClient = new MockWsClient();
-		const precisionFetcher = new MockPrecisionFetcher();
-		const executor = new BinanceOrderExecutor(
-			mockClient,
-			new MockErrorLogRepository() as any,
-			new MockTransactionRepository() as any,
-			precisionFetcher as any,
-		);
-		executor.forceInjectWsClientForTests(
-			mockClient,
-			new ExecutionRateLimiter(50, 10000),
-		);
-
-		const pepePair = new Pair(new Currency("PEPE"), new Currency("USDT"));
-		await executor.executeMarketSell(pepePair, new Amount(154032.403));
-
-		expect(mockClient.lastParams.quantity).toBe("154032");
-	});
+    expect(mockClient.lastParams.quantity).toBe("154032");
+  });
 });

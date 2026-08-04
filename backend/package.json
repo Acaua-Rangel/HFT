@@ -1,16 +1,16 @@
 {
-	"name": "backend",
-	"module": "index.ts",
-	"type": "module",
-	"private": true,
-	"scripts": {
-		"start": "bun run index.ts",
-		"build": "bun build ./index.ts --compile --outfile hft-engine"
-	},
-	"devDependencies": {
-		"@types/bun": "latest"
-	},
-	"peerDependencies": {
-		"typescript": "^5"
-	}
+  "name": "backend",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run index.ts",
+    "build": "bun build ./index.ts --compile --outfile hft-engine"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
 }

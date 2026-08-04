@@ -1,44 +1,36 @@
-import type { MathEngine } from "../domain/interfaces/MathEngine";
-import type { PrecisionFetcher } from "../domain/interfaces/PrecisionFetcher";
-import type { StateManager } from "../domain/interfaces/StateManager";
+import { StateManager } from "../domain/interfaces/StateManager";
+import { MathEngine } from "../domain/interfaces/MathEngine";
 import { Amount } from "../domain/valueObjects/Amount";
-import type { Fee } from "../domain/valueObjects/Fee";
-import type { Pair } from "../domain/valueObjects/Pair";
-import type { TriangularPairs } from "./TriangularPairs";
+import { Fee } from "../domain/valueObjects/Fee";
+import { TriangularPairs } from "./TriangularPairs";
+import { OrderBook } from "../domain/entities/OrderBook";
+import { Pair } from "../domain/valueObjects/Pair";
 
 export class CycleEvaluator {
-	constructor(
-		private readonly stateManager: StateManager,
-		private readonly mathEngine: MathEngine,
-		private readonly precisionFetcher?: PrecisionFetcher,
-	) {}
+  constructor(
+    private readonly stateManager: StateManager,
+    private readonly mathEngine: MathEngine
+  ) {}
 
-	public evaluate(
-		pairs: TriangularPairs,
-		fee1: Fee,
-		fee2: Fee,
-		fee3: Fee,
-		initialAmount: Amount,
-	): Amount {
-		let profitResult = new Amount(0);
+  public evaluate(pairs: TriangularPairs, fee1: Fee, fee2: Fee, fee3: Fee, initialAmount: Amount): Amount {
+    let profitResult = new Amount(0);
 
-		pairs.apply((first: Pair, second: Pair, third: Pair) => {
-			const firstBook = this.stateManager.retrieveOrderBook(first);
-			const secondBook = this.stateManager.retrieveOrderBook(second);
-			const thirdBook = this.stateManager.retrieveOrderBook(third);
+    pairs.apply((first: Pair, second: Pair, third: Pair) => {
+      const firstBook = this.stateManager.retrieveOrderBook(first);
+      const secondBook = this.stateManager.retrieveOrderBook(second);
+      const thirdBook = this.stateManager.retrieveOrderBook(third);
 
-			profitResult = this.mathEngine.calculateArbitrageProfit(
-				initialAmount,
-				firstBook,
-				secondBook,
-				thirdBook,
-				fee1,
-				fee2,
-				fee3,
-				this.precisionFetcher,
-			);
-		});
+      profitResult = this.mathEngine.calculateArbitrageProfit(
+        initialAmount,
+        firstBook,
+        secondBook,
+        thirdBook,
+        fee1,
+        fee2,
+        fee3
+      );
+    });
 
-		return profitResult;
-	}
+    return profitResult;
+  }
 }

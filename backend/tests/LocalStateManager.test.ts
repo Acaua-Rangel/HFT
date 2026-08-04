@@ -1,49 +1,39 @@
-import { describe, expect, it } from "bun:test";
+import { describe, it, expect } from "bun:test";
 import { LocalStateManager } from "../src/application/LocalStateManager";
-import { Amount } from "../src/domain/valueObjects/Amount";
-import { Currency } from "../src/domain/valueObjects/Currency";
 import { Pair } from "../src/domain/valueObjects/Pair";
 import { Tick } from "../src/domain/valueObjects/Tick";
+import { Amount } from "../src/domain/valueObjects/Amount";
+import { Currency } from "../src/domain/valueObjects/Currency";
 
 describe("LocalStateManager", () => {
-	it("should register a pair and update state with ticks", () => {
-		const manager = new LocalStateManager();
-		const pair = new Pair(new Currency("BTC"), new Currency("BRL"));
+  it("should register a pair and update state with ticks", () => {
+    const manager = new LocalStateManager();
+    const pair = new Pair(new Currency("BTC"), new Currency("BRL"));
+    
+    manager.registerPair(pair);
+    
+    let book = manager.retrieveOrderBook(pair);
+    expect(book.getLatest()).toBeUndefined();
 
-		manager.registerPair(pair);
+    const tick = new Tick(pair, [{price: new Amount(100000), qty: new Amount(10)}], [{price: new Amount(99990), qty: new Amount(10)}]);
+    manager.updateState(tick);
 
-		let book = manager.retrieveOrderBook(pair);
-		expect(book.getLatest()).toBeUndefined();
+    book = manager.retrieveOrderBook(pair);
+    expect(book.getLatest()).toBeDefined();
+    expect(book.getLatest()?.isForPair(pair)).toBeTrue();
+  });
 
-		const tick = new Tick(
-			pair,
-			[{ price: new Amount(100000), qty: new Amount(10) }],
-			[{ price: new Amount(99990), qty: new Amount(10) }],
-		);
-		manager.updateState(tick);
+  it("should isolate different pairs", () => {
+    const manager = new LocalStateManager();
+    const btcBrl = new Pair(new Currency("BTC"), new Currency("BRL"));
+    const ethBrl = new Pair(new Currency("ETH"), new Currency("BRL"));
+    
+    manager.registerPair(btcBrl);
+    manager.registerPair(ethBrl);
 
-		book = manager.retrieveOrderBook(pair);
-		expect(book.getLatest()).toBeDefined();
-		expect(book.getLatest()?.isForPair(pair)).toBeTrue();
-	});
+    manager.updateState(new Tick(btcBrl, [{price: new Amount(100000), qty: new Amount(10)}], [{price: new Amount(99990), qty: new Amount(10)}]));
 
-	it("should isolate different pairs", () => {
-		const manager = new LocalStateManager();
-		const btcBrl = new Pair(new Currency("BTC"), new Currency("BRL"));
-		const ethBrl = new Pair(new Currency("ETH"), new Currency("BRL"));
-
-		manager.registerPair(btcBrl);
-		manager.registerPair(ethBrl);
-
-		manager.updateState(
-			new Tick(
-				btcBrl,
-				[{ price: new Amount(100000), qty: new Amount(10) }],
-				[{ price: new Amount(99990), qty: new Amount(10) }],
-			),
-		);
-
-		expect(manager.retrieveOrderBook(btcBrl).getLatest()).toBeDefined();
-		expect(manager.retrieveOrderBook(ethBrl).getLatest()).toBeUndefined();
-	});
+    expect(manager.retrieveOrderBook(btcBrl).getLatest()).toBeDefined();
+    expect(manager.retrieveOrderBook(ethBrl).getLatest()).toBeUndefined();
+  });
 });
