@@ -28,13 +28,15 @@ export class BinanceBalanceFetcher {
       const balancesMap = new Map<string, Amount>();
 
       if (Array.isArray(data.balances)) {
-        for (const b of data.balances) {
+         for (const b of data.balances) {
            const asset = b.asset;
-           const freeVal = parseFloat(b.free);
-           if (freeVal > 0) {
-             balancesMap.set(asset, new Amount(freeVal));
+           const freeVal = parseFloat(b.free || "0");
+           const lockedVal = parseFloat(b.locked || "0");
+           const totalVal = freeVal + lockedVal;
+           if (totalVal > 0) {
+             balancesMap.set(asset, new Amount(totalVal));
            }
-        }
+         }
       }
       
       return balancesMap;
