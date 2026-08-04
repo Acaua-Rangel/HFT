@@ -186,16 +186,21 @@ async function startHftEngine() {
                         const bnbRequired = estimatedQuoteFee / bnbQuotePrice;
                         
                         if (bnbRequired > globalBnbBalance) {
+                            if (!isBnbDiscountLocked) {
+                                console.log(`🔒 BNB Fee Lock Triggered! Req: ${bnbRequired.toFixed(5)} BNB | Bal: ${globalBnbBalance.toFixed(5)} BNB | Lot: ${baseLotQuote.toFixed(2)} | BnbPx: ${bnbQuotePrice.toFixed(2)}`);
+                            }
                             simExecutor.bnbDiscountEnabled = false;
-                            // TODO: Add live executor toggle if needed
                             isBnbDiscountLocked = true;
                         } else {
+                            if (isBnbDiscountLocked) {
+                                console.log(`🔓 BNB Fee Lock Released. Req: ${bnbRequired.toFixed(5)} BNB | Bal: ${globalBnbBalance.toFixed(5)} BNB`);
+                            }
                             isBnbDiscountLocked = false;
                         }
                     }
                 }
                 
-                const bnbEnabled = simExecutor.bnbDiscountEnabled;
+                const bnbEnabled = currentMode === "LIVE" ? !isBnbDiscountLocked : simExecutor.bnbDiscountEnabled;
                 const feeRate = quoteSym === "FDUSD" ? 0 : (bnbEnabled ? 0.00075 : 0.001);
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
 
