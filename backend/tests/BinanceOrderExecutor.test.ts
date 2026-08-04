@@ -230,4 +230,43 @@ describe("BinanceOrderExecutor Logic Tests", () => {
 
     expect(mockClient.lastParams.quantity).toBe("154032");
   });
+
+  test("Execution Error - Should log ORDER_TRUNCATED_TO_ZERO if quantity is too small", async () => {
+    const errRepo = new MockErrorLogRepository();
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any, mockStateManager as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
+
+    // Try to buy with an extremely small amount of quote currency
+    await executor.executeMakerBuy(pair, new Amount(0.0001), undefined, 50);
+
+    expect(errRepo.errors.length).toBe(1);
+    expect(errRepo.errors[0].errorType.value).toBe("ORDER_TRUNCATED_TO_ZERO");
+  });
+
+  test("Execution Error - Should retry and then log ORDER_REJECTED_INSUFFICIENT_FUNDS for -2010", async () => {
+    const errRepo = new MockErrorLogRepository();
+    const mockClient = new MockWsClient();
+    // Simulate -2010 error
+    mockClient.sendRequest = async (method: string, params: any) => {
+      return {
+        id: "mock-id",
+        status: 400,
+        result: {},
+        error: { code: -2010, msg: "Account has insufficient balance for requested action." }
+      };
+    };
+    
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any, mockStateManager as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
+
+    const fill = await executor.executeMakerBuy(pair, amount, undefined, 50);
+    let success = false; fill.apply((q, qq, p, s) => { success = s; });
+    
+    expect(success).toBe(false);
+    expect(errRepo.errors.length).toBe(1);
+    expect(errRepo.errors[0].errorType.value).toBe("ORDER_REJECTED_INSUFFICIENT_FUNDS");
+  });
 });
