@@ -141,6 +141,7 @@ function App() {
   const pnlRef = useRef(pnl);
   const wsRef = useRef<WebSocket | null>(null);
   const bnbDiscountRef = useRef(bnbDiscount);
+  const lastBnbToggleTime = useRef<number>(0);
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -192,7 +193,7 @@ function App() {
             if (data.quoteBalance !== undefined) setBalance(data.quoteBalance);
             if (data.bnbBalance !== undefined) setBnbBalance(data.bnbBalance);
             if (data.latency !== undefined) setLatency(data.latency);
-            if (data.bnbDiscount !== undefined) {
+            if (data.bnbDiscount !== undefined && Date.now() - lastBnbToggleTime.current > 1500) {
               setBnbDiscount(data.bnbDiscount);
               bnbDiscountRef.current = data.bnbDiscount;
             }
@@ -201,7 +202,7 @@ function App() {
             if (data.quoteBalance !== undefined) setBalance(data.quoteBalance);
             if (data.bnbBalance !== undefined) setBnbBalance(data.bnbBalance);
             if (data.isRunning !== undefined) setIsRunning(data.isRunning);
-            if (data.bnbDiscount !== undefined) {
+            if (data.bnbDiscount !== undefined && Date.now() - lastBnbToggleTime.current > 1500) {
               setBnbDiscount(data.bnbDiscount);
               bnbDiscountRef.current = data.bnbDiscount;
             }
@@ -387,6 +388,7 @@ function App() {
             style={{ opacity: bnbDiscountLocked ? 0.5 : 1, cursor: bnbDiscountLocked ? 'not-allowed' : 'pointer' }}
             onClick={() => {
               if (bnbDiscountLocked) return;
+              lastBnbToggleTime.current = Date.now();
               const newValue = !bnbDiscount;
               setBnbDiscount(newValue);
               bnbDiscountRef.current = newValue;
