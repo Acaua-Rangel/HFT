@@ -118,7 +118,10 @@ export class BinanceOrderExecutor implements OrderExecutor {
         }
 
         const truncatedQty = Math.floor(baseQuantityRaw * factor) / factor;
-        if (truncatedQty <= 0) break; 
+        if (truncatedQty <= 0) {
+            this.logError("ORDER_TRUNCATED_TO_ZERO", `Raw qty ${baseQuantityRaw} truncated to 0 for factor ${factor}`);
+            break; 
+        }
 
         const params: any = {
           symbol,
@@ -134,9 +137,14 @@ export class BinanceOrderExecutor implements OrderExecutor {
 
         if (placeRes.status !== 200) {
           if (placeRes.error?.code === -2010) {
-             continue; 
+             if (attempt === maxRetries - 1) {
+                 this.logError("ORDER_REJECTED_INSUFFICIENT_FUNDS", JSON.stringify(placeRes.error));
+             } else {
+                 continue; 
+             }
+          } else {
+             this.logError("ORDER_REJECTED", JSON.stringify(placeRes.error));
           }
-          this.logError("ORDER_REJECTED", JSON.stringify(placeRes.error));
           break;
         }
 
@@ -184,6 +192,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
     }
 
     if (accumulatedExecutedQty === 0) {
+       console.log(`[LIVE] ${side} order placed but cancelled unfilled (TTL expired). Price: ${priceStr}, Qty: ${truncatedQty}`);
        return OrderFill.failed();
     }
 
