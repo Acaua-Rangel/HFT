@@ -70,6 +70,9 @@ export class BinanceOrderExecutor implements OrderExecutor {
     
     let accumulatedExecutedQty = 0; // Base asset
     let accumulatedQuoteQty = 0;    // Quote asset
+    
+    let lastPriceStr = "";
+    let lastTruncatedQty = 0;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
@@ -103,6 +106,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
         
         const priceDecimals = tickSize.toString().includes(".") ? (tickSize.toString().split(".")[1]?.length || 0) : 0;
         const priceStr = roundedPrice.toFixed(priceDecimals);
+        lastPriceStr = priceStr;
 
         const factor = Math.pow(10, quantityDecimals);
         
@@ -118,6 +122,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
         }
 
         const truncatedQty = Math.floor(baseQuantityRaw * factor) / factor;
+        lastTruncatedQty = truncatedQty;
         if (truncatedQty <= 0) {
             this.logError("ORDER_TRUNCATED_TO_ZERO", `Raw qty ${baseQuantityRaw} truncated to 0 for factor ${factor}`);
             break; 
@@ -192,7 +197,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
     }
 
     if (accumulatedExecutedQty === 0) {
-       console.log(`[LIVE] ${side} order placed but cancelled unfilled (TTL expired). Price: ${priceStr}, Qty: ${truncatedQty}`);
+       console.log(`[LIVE] ${side} order placed but cancelled unfilled (TTL expired). Price: ${lastPriceStr}, Qty: ${lastTruncatedQty}`);
        return OrderFill.failed();
     }
 
