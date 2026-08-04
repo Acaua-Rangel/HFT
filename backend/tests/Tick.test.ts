@@ -47,4 +47,34 @@ describe("Tick", () => {
         const tick = new Tick(pair, [], []);
         expect(tick.getMidPrice()).toBeUndefined();
     });
+
+    it("should extract top N levels correctly", () => {
+        const asks: Level[] = [
+            { price: new Amount(100), qty: new Amount(1) },
+            { price: new Amount(101), qty: new Amount(2) },
+            { price: new Amount(102), qty: new Amount(3) }
+        ];
+        const bids: Level[] = [
+            { price: new Amount(90), qty: new Amount(1) },
+            { price: new Amount(89), qty: new Amount(2) },
+            { price: new Amount(88), qty: new Amount(3) }
+        ];
+        const tick = new Tick(pair, asks, bids);
+        
+        let topAsks: Level[] = [];
+        tick.applyTopNAsks(2, (levels) => { topAsks = levels; });
+        expect(topAsks.length).toBe(2);
+        
+        let topAskPrices = 0;
+        topAsks.forEach(l => l.price.apply(v => topAskPrices += v));
+        expect(topAskPrices).toBe(201); // 100 + 101
+
+        let topBids: Level[] = [];
+        tick.applyTopNBids(2, (levels) => { topBids = levels; });
+        expect(topBids.length).toBe(2);
+        
+        let topBidPrices = 0;
+        topBids.forEach(l => l.price.apply(v => topBidPrices += v));
+        expect(topBidPrices).toBe(179); // 90 + 89
+    });
 });
