@@ -69,4 +69,12 @@ export class Tick {
   public applyTopBid(callback: (level: Level | undefined) => void): void {
     callback(this.bids.length > 0 ? this.bids[0] : undefined);
   }
+
+  public applyTopNAsks(n: number, callback: (levels: Level[]) => void): void {
+    callback(this.asks.slice(0, n));
+  }
+
+  public applyTopNBids(n: number, callback: (levels: Level[]) => void): void {
+    callback(this.bids.slice(0, n));
+  }
 }
