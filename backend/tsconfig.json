@@ -10,6 +10,8 @@
 
     // Bundler mode
     "moduleResolution": "bundler",
+    "forceConsistentCasingInFileNames": true,
+    "downlevelIteration": true,
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": false,
     "noEmit": true,

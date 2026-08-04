@@ -20,7 +20,7 @@ async function run() {
     });
     
     if (res.ok) {
-      const data = await res.json();
+      const data: any = await res.json();
       console.log("=== BINANCE SPOT BALANCES ===");
       for (const b of data.balances) {
         if (parseFloat(b.free) > 0 || parseFloat(b.locked) > 0) {

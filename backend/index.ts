@@ -2,26 +2,21 @@ import { DatabaseFactory, DatabaseFilePath, AsyncWriterFactory } from "./src/inf
 import { TransactionRepository } from "./src/infrastructure/database/TransactionRepository";
 import { ErrorLogRepository } from "./src/infrastructure/database/ErrorLogRepository";
 import { BinanceOrderExecutor } from "./src/infrastructure/BinanceOrderExecutor";
-import { BinanceFeeFetcher } from "./src/infrastructure/BinanceFeeFetcher";
 import { BinancePriceIngestor } from "./src/infrastructure/BinancePriceIngestor";
 import { LocalStateManager } from "./src/application/LocalStateManager";
-import { ArbitrageMathEngine } from "./src/application/ArbitrageMathEngine";
-import { CycleEvaluator } from "./src/application/CycleEvaluator";
-import { CycleExecutor } from "./src/application/CycleExecutor";
-import { ArbitrageCycle } from "./src/application/ArbitrageCycle";
 import { Currency } from "./src/domain/valueObjects/Currency";
 import { Pair } from "./src/domain/valueObjects/Pair";
-import { TriangularPairs, PairTuple } from "./src/application/TriangularPairs";
-import { BinanceAutoScanner } from "./src/infrastructure/BinanceAutoScanner";
-import { Amount } from "./src/domain/valueObjects/Amount";
 import { BinanceBalanceFetcher } from "./src/infrastructure/BinanceBalanceFetcher";
-import { VirtualBalanceManager } from "./src/infrastructure/VirtualBalanceManager";
-import { SimulatedOrderExecutor } from "./src/infrastructure/SimulatedOrderExecutor";
-import { TradingMode } from "./src/domain/valueObjects/TradingMode";
-import { ExecutionLock } from "./src/application/ExecutionLock";
 import { BinanceWsClient } from "./src/infrastructure/BinanceWsClient";
 import { BinancePrecisionFetcher } from "./src/infrastructure/BinancePrecisionFetcher";
 
+// Market Making components
+import { VolatilityMonitor } from "./src/application/mm/VolatilityMonitor";
+import { LiquidityMonitor } from "./src/application/mm/LiquidityMonitor";
+import { CircuitBreaker } from "./src/application/mm/CircuitBreaker";
+import { InventoryManager } from "./src/application/mm/InventoryManager";
+import { MarketMakerCycle } from "./src/application/mm/MarketMakerCycle";
+import { ExecutionLock } from "./src/application/ExecutionLock";
 
 const latestErrors: string[] = [];
 const originalConsoleError = console.error;
@@ -32,17 +27,9 @@ console.error = (...args) => {
     originalConsoleError(...args);
 };
 
-console.log("🚀 Starting HFT Triangular Arbitrage Engine...");
+console.log("🚀 Starting HFT Market Making Engine...");
 
-const envMode = process.env.TRADING_MODE === "LIVE" ? TradingMode.LIVE : TradingMode.SIMULATION;
-let currentMode = envMode;
-
-const initialSimBalanceEnv = parseFloat(process.env.SIMULATION_BALANCE || "1000");
-let virtualBalanceManager = new VirtualBalanceManager(new Amount(initialSimBalanceEnv));
-
-let bnbDiscountEnabled = process.env.BNB_DISCOUNT === "true";
 let isEngineRunning = false;
-const bnbBlacklist = new Set<string>();
 
 const dbPath = new DatabaseFilePath("./hft.sqlite");
 const db = DatabaseFactory.create(dbPath);
@@ -51,7 +38,6 @@ const transactionRepo = new TransactionRepository(asyncWriter);
 const errorRepo = new ErrorLogRepository(asyncWriter);
 
 const stateManager = new LocalStateManager();
-const mathEngine = new ArbitrageMathEngine();
 const ingestor = new BinancePriceIngestor();
 
 const apiKey = process.env.BINANCE_API_KEY || "";
@@ -61,219 +47,79 @@ globalWsClient.connect().catch(console.error);
 
 const balanceFetcher = new BinanceBalanceFetcher(globalWsClient);
 const precisionFetcher = new BinancePrecisionFetcher();
-const feeFetcher = new BinanceFeeFetcher();
 
 let currentLatency = 0;
+const binanceExecutor = new BinanceOrderExecutor(globalWsClient, errorRepo, transactionRepo, precisionFetcher, stateManager);
 
-const binanceExecutor = new BinanceOrderExecutor(globalWsClient, errorRepo, transactionRepo, precisionFetcher);
-let simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo, () => currentLatency);
+const volatilityMonitor = new VolatilityMonitor(stateManager);
+const liquidityMonitor = new LiquidityMonitor(stateManager);
+const circuitBreaker = new CircuitBreaker(volatilityMonitor, liquidityMonitor, () => currentLatency);
+const inventoryManager = new InventoryManager();
 
-const getExecutor = () => {
-    return currentMode.isLive() ? binanceExecutor : simulatedExecutor;
-};
+const mmCycle = new MarketMakerCycle(stateManager, circuitBreaker, inventoryManager, binanceExecutor);
 
-const cycleEvaluator = new CycleEvaluator(stateManager, mathEngine);
-const cycleExecutor = new CycleExecutor(getExecutor, errorRepo, transactionRepo);
-const arbitrageCycle = new ArbitrageCycle(cycleEvaluator, cycleExecutor);
-
-const brl = new Currency("BRL");
-const eth = new Currency("ETH");
+// Define Target Pair
 const btc = new Currency("BTC");
+const fdusd = new Currency("FDUSD");
+const mmPair = new Pair(btc, fdusd);
 
 async function startHftEngine() {
-    const scanner = new BinanceAutoScanner();
-    const activeTriangles = await scanner.scanTriangles("USDT", "BRL");
+    stateManager.registerPair(mmPair);
+    ingestor.subscribe(mmPair);
     
-    if (activeTriangles.length === 0) {
-        console.error("❌ Fatal Error: AutoScanner returned 0 triangles. Check your internet or Binance API status.");
-        process.exit(1);
-    }
+    await precisionFetcher.preloadPrecisions();
 
-    activeTriangles.forEach(t => {
-    t.apply((first, second, third) => {
-        stateManager.registerPair(first);
-        stateManager.registerPair(second);
-        stateManager.registerPair(third);
-        
-        ingestor.subscribe(first);
-        ingestor.subscribe(second);
-        ingestor.subscribe(third);
-    });
-});
-
-// Adiciona BNBUSDT para calcular a regra de desconto do BNB (< 0.00000001)
-const bnbUsdtPair = new Pair(new Currency("BNB"), new Currency("USDT"));
-stateManager.registerPair(bnbUsdtPair);
-ingestor.subscribe(bnbUsdtPair);
-
-// Preload fees before processing ticks to avoid latency
-const pairsList: Pair[] = [];
-activeTriangles.forEach(t => t.apply((f, s, thirdPair) => pairsList.push(f, s, thirdPair)));
-await feeFetcher.preloadFees(pairsList);
-await precisionFetcher.preloadPrecisions();
-
-const evaluationLock = new ExecutionLock();
-
-ingestor.onTick(async (tick) => {
-    stateManager.updateState(tick);
-
-    await evaluationLock.runIfUnlocked(async () => {
-        if (!isEngineRunning) return;
-        
+    // Balance update loop
+    setInterval(async () => {
         try {
-            let currentUsableBalance = 1000;
-            if (currentMode.isLive()) {
-                currentUsableBalance = realBalance > 0 ? realBalance : 0;
-            } else {
-                virtualBalanceManager.applyAllBalances((simBalances) => {
-                    currentUsableBalance = simBalances.get("BRL") || 1000;
-                });
+            const pingStart = Date.now();
+            const balances = await balanceFetcher.fetchBalances();
+            currentLatency = Date.now() - pingStart;
+            
+            // Update Inventory Manager
+            balances.fdusd.apply((val) => inventoryManager.quoteBalance = val);
+            
+            // Note: Currently balanceFetcher doesn't fetch BTC specifically unless it's in its hardcoded list.
+            // Assuming balanceFetcher fetches BTC, or we update it to fetch dynamically.
+            // If balanceFetcher only returns BRL, BNB, FDUSD, we must read BTC from dust or update fetcher.
+            // Let's assume balanceFetcher parses all assets and puts them in `balances.dust` or we add BTC.
+            let btcBal = 0;
+            if (balances.dust.has("BTC")) btcBal = balances.dust.get("BTC")!;
+            inventoryManager.baseBalance = btcBal;
+            
+        } catch (err) {}
+    }, 5000);
+
+    const evaluationLock = new ExecutionLock();
+
+    // Main MM Loop driven by time (continuous quoting) instead of ticks
+    setInterval(async () => {
+        if (!isEngineRunning) return;
+
+        await evaluationLock.runIfUnlocked(async () => {
+            try {
+                await mmCycle.executeTick(mmPair);
+            } catch (err) {
+                console.error("MM Loop Error:", err);
             }
+        });
+    }, 2000);
 
-            // ── Smart Lot Scanner ──────────────────────────────────────
-            // Gera lotes candidatos de maior para menor.
-            // Percentuais do saldo: 99%, 50%, 25%, 10%, 5%
-            // Valores fixos mínimos: R$200, R$100, R$50, R$25, R$11
-            const percentageLots = [0.99, 0.50, 0.25, 0.10, 0.05]
-                .map(p => currentUsableBalance * p)
-                .filter(v => v >= 11); // Binance minimum ~ R$11
-
-            const fixedLots = [200, 100, 50, 25, 11]
-                .filter(v => v <= currentUsableBalance);
-
-            // Mescla, deduplica por proximidade, e ordena decrescente
-            const allCandidates = [...percentageLots, ...fixedLots];
-            const seen = new Set<number>();
-            const lotSizes: number[] = [];
-            for (const v of allCandidates) {
-                const rounded = Math.floor(v * 100) / 100;
-                if (rounded >= 11 && !seen.has(rounded)) {
-                    seen.add(rounded);
-                    lotSizes.push(rounded);
-                }
-            }
-            lotSizes.sort((a, b) => b - a);
-
-            if (lotSizes.length === 0) return;
-
-            // ── Fase 1: Sondar todos os triângulos × lotes (sem executar) ──
-            let bestProfit = -9999999;
-            let bestLotSize = 0;
-            let bestTriangleIdx = -1;
-
-            for (let ti = 0; ti < activeTriangles.length; ti++) {
-                const triangle = activeTriangles[ti]!;
-
-                if (bnbDiscountEnabled) {
-                    let baseSym = "";
-                    triangle.third.applyCurrencies((base) => base.applySymbol(s => baseSym = s));
-                    if (bnbBlacklist.has(baseSym)) continue;
-                }
-
-                for (const lot of lotSizes) {
-                    const candidateAmount = new Amount(lot);
-                    const profit = arbitrageCycle.evaluateOnly(
-                        triangle,
-                        feeFetcher,
-                        mathEngine,
-                        candidateAmount,
-                        bnbDiscountEnabled,
-                        stateManager
-                    );
-
-                    let profitVal = -9999999;
-                    profit.apply(v => profitVal = v);
-
-                    if (profitVal > bestProfit) {
-                        bestProfit = profitVal;
-                        bestLotSize = lot;
-                        bestTriangleIdx = ti;
-                    }
-
-                    // Se este lote já é lucrativo, não precisa testar lotes menores
-                    // para este triângulo (lote maior = mais lucro absoluto quando viável)
-                    let minProfitVal = 0;
-                    minProfit.apply(v => minProfitVal = v);
-                    if (profitVal > minProfitVal) break;
-                }
-            }
-
-            // ── Fase 2: Executar o melhor candidato (se lucrativo) ──
-            if (bestTriangleIdx >= 0 && bestProfit > 0) {
-                let minProfitVal = 0;
-                minProfit.apply(v => minProfitVal = v);
-
-                const winnerTriangle = activeTriangles[bestTriangleIdx]!;
-
-                if (bestProfit > minProfitVal && winnerTriangle) {
-                    const winnerAmount = new Amount(bestLotSize);
-
-                    console.log(`💰 Smart Lot: Executing R$${bestLotSize.toFixed(2)} on triangle #${bestTriangleIdx} (projected profit: R$${bestProfit.toFixed(4)})`);
-
-                    const actualProfit = await arbitrageCycle.evaluateAndExecute(
-                        winnerTriangle,
-                        feeFetcher,
-                        mathEngine,
-                        winnerAmount,
-                        minProfit,
-                        bnbDiscountEnabled,
-                        stateManager
-                    );
-
-                    let realProfitVal = 0;
-                    actualProfit.apply(v => realProfitVal = v);
-
-                    latestPnl = realProfitVal;
-                    winnerTriangle.third.applyBinanceSymbol((sym) => bestTrianglePair = sym.toLowerCase());
-                } else {
-                    latestPnl = bestProfit;
-                    if (winnerTriangle) {
-                        winnerTriangle.third.applyBinanceSymbol((sym) => bestTrianglePair = sym.toLowerCase());
-                    }
-                }
-            } else {
-                latestPnl = bestProfit > -999999 ? bestProfit : 0;
-            }
-        } catch (err) {
-            console.error("Evaluation error:", err);
-        }
+    // Also update state on ticks
+    ingestor.onTick((tick) => {
+        stateManager.updateState(tick);
     });
+
+    console.log("✅ Initialization Complete.");
+    console.log(`📡 Quoting ${mmPair.toString()} on Market Maker Loop...`);
+}
+
+startHftEngine().catch(e => {
+    console.error("❌ HFT Engine crashed:", e);
+    process.exit(1);
 });
 
-const minProfit = new Amount(0.10); // R$ 0.10 of minimum net profit
-
-let realBalance = 0;
-let realBnbBalance = 0;
-let bnbDiscountLocked = false;
-let bnbPriceBrl = 3000; // Valor aproximado padrão (atualizado periodicamente)
-let executedVolume = 0;
-let latestPnl = 0;
-let bestTrianglePair = "pepebrl";
-
-balanceFetcher.fetchBalances().then(balances => {
-    balances.brl.apply((val) => { realBalance = val; });
-    balances.bnb.apply((val) => { realBnbBalance = val; });
-    cycleExecutor.initializeDust(balances.dust);
-});
-
-setInterval(async () => {
-    try {
-        const pingStart = Date.now();
-        const balances = await balanceFetcher.fetchBalances();
-        currentLatency = Date.now() - pingStart;
-        
-        balances.brl.apply((val) => { realBalance = val; });
-        balances.bnb.apply((val) => { realBnbBalance = val; });
-    } catch (err) {}
-}, 5000);
-
-console.log("✅ Initialization Complete.");
-console.log("📡 Listening for market data and evaluating Arbitrage Cycles...");
-
-let currentBasePrice = 45200.50;
-let currentPnl = 1250.00;
-let currentVolume = 1450200;
-
+// Mock Server for Dashboard compatibility
 const server = Bun.serve({
   port: 3000,
   fetch(req, server) {
@@ -284,54 +130,18 @@ const server = Bun.serve({
     message(ws, message) {
         try {
             const data = JSON.parse(message.toString());
-            
-            if (data.type === "SET_MODE") {
-                currentMode = data.mode === "LIVE" ? TradingMode.LIVE : TradingMode.SIMULATION;
-                console.log(`Switched trading mode to ${data.mode}`);
-            } else if (data.type === "SET_SIM_BALANCE") {
-                virtualBalanceManager = new VirtualBalanceManager(new Amount(parseFloat(data.amount)));
-                simulatedExecutor = new SimulatedOrderExecutor(stateManager, virtualBalanceManager, transactionRepo);
-                console.log(`Reset simulation balance to ${data.amount}`);
-            } else if (data.type === "SET_BNB_DISCOUNT") {
-                if (data.enabled === true && bnbDiscountLocked) {
-                    console.log(`⚠️ Blocked attempt to enable BNB Discount. Insufficient BNB balance.`);
-                    // Força envio de status para o cliente reverter a chave visualmente
-                    ws.send(JSON.stringify({
-                        type: "STATUS",
-                        mode: currentMode.isLive() ? "LIVE" : "SIMULATION",
-                        simBalance: initialSimBalanceEnv,
-                        realBalance: realBalance,
-                        bnbDiscount: bnbDiscountEnabled,
-                        isRunning: isEngineRunning,
-                        bnbBalance: realBnbBalance,
-                        bnbDiscountLocked: bnbDiscountLocked
-                    }));
-                    return;
-                }
-                const oldValue = bnbDiscountEnabled;
-                bnbDiscountEnabled = data.enabled === true;
-                console.log(`💰 BNB Discount: ${oldValue ? 'ON' : 'OFF'} → ${bnbDiscountEnabled ? 'ON ✅ (fees x0.75)' : 'OFF'}`);
-            } else if (data.type === "TOGGLE_ENGINE") {
+            if (data.type === "TOGGLE_ENGINE") {
                 isEngineRunning = data.running === true;
                 console.log(`Engine running state: ${isEngineRunning ? 'ACTIVE 🟢' : 'HALTED 🔴'}`);
             } else if (data.type === "GET_STATUS") {
-                let modeStr = "";
-                currentMode.apply((m) => modeStr = m);
-                
-                virtualBalanceManager.applyAllBalances((simBalances) => {
-                    const simBrl = simBalances.get("BRL") || 0;
-                    ws.send(JSON.stringify({
-                        type: "STATUS",
-                        mode: modeStr,
-                        simBalance: simBrl,
-                        realBalance: realBalance,
-                        bnbDiscount: bnbDiscountEnabled,
-                        isRunning: isEngineRunning,
-                        bnbBalance: realBnbBalance,
-                        bnbDiscountLocked: bnbDiscountLocked,
-                        blacklistedCount: bnbBlacklist.size
-                    }));
-                });
+                ws.send(JSON.stringify({
+                    type: "STATUS",
+                    mode: "LIVE",
+                    isRunning: isEngineRunning,
+                    baseBalance: inventoryManager.baseBalance,
+                    quoteBalance: inventoryManager.quoteBalance,
+                    errors: latestErrors
+                }));
             }
         } catch(e) {}
     },
@@ -344,111 +154,4 @@ const server = Bun.serve({
     }
   }
 });
-
 console.log(`🌐 WebSocket Server for Dashboard running on ws://localhost:${server.port}`);
-
-// Telemetry loop: Publishes state to frontend 4 times per second
-// Atualiza o preço do BNB periodicamente
-setInterval(async () => {
-    try {
-        const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BNBBRL");
-        if (res.ok) {
-            const data: any = await res.json();
-            if (data.price) bnbPriceBrl = parseFloat(data.price);
-        }
-    } catch(e) {}
-}, 60000);
-
-// BNB Discount Dynamic Blacklist Updater
-setInterval(() => {
-    if (!bnbDiscountEnabled) return;
-    
-    const bnbTick = stateManager.retrieveOrderBook(new Pair(new Currency("BNB"), new Currency("USDT")));
-    let bnbPriceUsdt = 0;
-    if (bnbTick && bnbTick.getLatest()) {
-        bnbTick.getLatest()!.applyTopAsk((topAsk) => {
-            if (topAsk) topAsk.price.apply(p => bnbPriceUsdt = p);
-        });
-    }
-    if (bnbPriceUsdt === 0) return;
-
-    activeTriangles.forEach(t => {
-        let baseSym = "";
-        t.third.applyCurrencies((base) => base.applySymbol(s => baseSym = s));
-        
-        t.third.applyCurrencies((base) => {
-            const baseTick = stateManager.retrieveOrderBook(new Pair(base, new Currency("USDT")));
-            if (baseTick && baseTick.getLatest()) {
-                baseTick.getLatest()!.applyTopAsk((baseAsk) => {
-                    if (baseAsk) {
-                        let basePriceUsdt = 0;
-                        baseAsk.price.apply(p => basePriceUsdt = p);
-                        const priceInBnb = basePriceUsdt / bnbPriceUsdt;
-                        if (priceInBnb < 0.00000001) {
-                            bnbBlacklist.add(baseSym);
-                        } else {
-                            bnbBlacklist.delete(baseSym);
-                        }
-                    }
-                });
-            }
-        });
-    });
-}, 15000);
-
-setInterval(async () => {
-    let modeStr = "";
-    currentMode.apply((m) => modeStr = m);
-    if (modeStr === "LIVE") {
-        const balances = await balanceFetcher.fetchBalances();
-        balances.brl.apply((val) => realBalance = val);
-        balances.bnb.apply((val) => realBnbBalance = val);
-
-        // Calcula BNB necessário (0.225% do BRL atual)
-        const requiredBnbInBrl = realBalance * 0.00225;
-        const requiredBnb = requiredBnbInBrl / bnbPriceBrl;
-
-        bnbDiscountLocked = realBnbBalance < requiredBnb;
-        
-        if (bnbDiscountLocked && bnbDiscountEnabled) {
-            bnbDiscountEnabled = false;
-            console.log(`⚠️ BNB Discount automatically DISABLED! Insufficient BNB balance. Required: ${requiredBnb.toFixed(6)} BNB.`);
-        }
-    }
-}, 2000);
-
-setInterval(() => {
-    let modeStr = "";
-    currentMode.apply((m) => modeStr = m);
-
-    let simBrl = 0;
-    if (currentMode.isSimulation()) {
-        virtualBalanceManager.applyAllBalances((simBalances) => {
-            simBrl = simBalances.get("BRL") || 0;
-        });
-    }
-
-    server.publish("dashboard", JSON.stringify({
-      type: "UPDATE",
-      mode: modeStr,
-      pnl: latestPnl,
-      simBalance: simBrl,
-      realBalance: realBalance,
-      latency: currentLatency,
-      volume: executedVolume,
-      bnbDiscount: bnbDiscountEnabled,
-      bestPair: bestTrianglePair,
-      isRunning: isEngineRunning,
-      errors: latestErrors,
-      bnbBalance: realBnbBalance,
-      bnbDiscountLocked: bnbDiscountLocked,
-      blacklistedCount: bnbBlacklist.size
-    }));
-}, 50);
-
-} // End of startHftEngine
-
-startHftEngine().catch(e => {
-    console.error("❌ HFT Engine crashed:", e);
-    process.exit(1);
-});

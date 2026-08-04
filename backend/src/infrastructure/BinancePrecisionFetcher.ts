@@ -1,6 +1,8 @@
 export class BinancePrecisionFetcher {
   private quantityPrecisionCache = new Map<string, number>();
+  private priceTickSizeCache = new Map<string, number>();
   private defaultPrecision = 0;
+  private defaultTickSize = 0.01;
 
   public async preloadPrecisions(): Promise<void> {
     try {
@@ -19,8 +21,13 @@ export class BinancePrecisionFetcher {
             }
             this.quantityPrecisionCache.set(item.symbol.toUpperCase(), decimals);
           }
+
+          const priceFilter = item.filters.find((f: any) => f.filterType === "PRICE_FILTER");
+          if (priceFilter && priceFilter.tickSize) {
+            this.priceTickSizeCache.set(item.symbol.toUpperCase(), parseFloat(priceFilter.tickSize));
+          }
         }
-        console.log(`✅ Preloaded precision filters for ${this.quantityPrecisionCache.size} symbols from Binance API.`);
+        console.log(`✅ Preloaded precision and tickSize filters for ${this.quantityPrecisionCache.size} symbols from Binance API.`);
       } else {
         console.warn(`⚠️ Failed to preload exchangeInfo: HTTP ${response.status}`);
       }
@@ -31,5 +38,9 @@ export class BinancePrecisionFetcher {
 
   public getQuantityDecimals(symbol: string): number {
     return this.quantityPrecisionCache.get(symbol.toUpperCase()) ?? this.defaultPrecision;
+  }
+
+  public getPriceTickSize(symbol: string): number {
+    return this.priceTickSizeCache.get(symbol.toUpperCase()) ?? this.defaultTickSize;
   }
 }

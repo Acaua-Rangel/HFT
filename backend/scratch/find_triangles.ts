@@ -1,7 +1,7 @@
 async function run() {
   console.log("Fetching Binance exchange info...");
   const res = await fetch("https://api.binance.com/api/v3/exchangeInfo");
-  const data = await res.json();
+  const data: any = await res.json();
   
   const symbols = data.symbols.filter((s: any) => s.status === "TRADING");
   const pairs = new Set(symbols.map((s: any) => s.symbol));

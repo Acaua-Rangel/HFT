@@ -1,12 +1,12 @@
 import { Currency } from "../src/domain/valueObjects/Currency";
 import { Pair } from "../src/domain/valueObjects/Pair";
-import { TriangularPairs, PairTuple } from "../src/application/TriangularPairs";
+import { TriangularPairs, PairTuple } from "../src/legacy/TriangularPairs";
 import { Amount } from "../src/domain/valueObjects/Amount";
 import { LocalStateManager } from "../src/application/LocalStateManager";
-import { ArbitrageMathEngine } from "../src/application/ArbitrageMathEngine";
-import { CycleEvaluator } from "../src/application/CycleEvaluator";
-import { CycleExecutor } from "../src/application/CycleExecutor";
-import { ArbitrageCycle } from "../src/application/ArbitrageCycle";
+import { ArbitrageMathEngine } from "../src/legacy/ArbitrageMathEngine";
+import { CycleEvaluator } from "../src/legacy/CycleEvaluator";
+import { CycleExecutor } from "../src/legacy/CycleExecutor";
+import { ArbitrageCycle } from "../src/legacy/ArbitrageCycle";
 import { FeeFetcher } from "../src/domain/interfaces/FeeFetcher";
 import { Fee } from "../src/domain/valueObjects/Fee";
 import { Tick } from "../src/domain/valueObjects/Tick";

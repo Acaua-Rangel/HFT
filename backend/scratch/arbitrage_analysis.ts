@@ -2,7 +2,7 @@ import { fetch } from "bun";
 
 async function getPrices() {
   const res = await fetch("https://api.binance.com/api/v3/ticker/bookTicker");
-  const data = await res.json();
+  const data: any = await res.json();
   const map = new Map<string, { bidPrice: number, bidQty: number, askPrice: number, askQty: number }>();
   for (const item of data) {
     map.set(item.symbol, {

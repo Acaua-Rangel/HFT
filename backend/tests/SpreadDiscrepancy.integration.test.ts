@@ -3,7 +3,7 @@ import { Tick } from "../src/domain/valueObjects/Tick";
 import { Pair } from "../src/domain/valueObjects/Pair";
 import { Currency } from "../src/domain/valueObjects/Currency";
 import { Amount } from "../src/domain/valueObjects/Amount";
-import { ArbitrageMathEngine } from "../src/application/ArbitrageMathEngine";
+import { ArbitrageMathEngine } from "../src/legacy/ArbitrageMathEngine";
 import { OrderBook } from "../src/domain/entities/OrderBook";
 import { Fee } from "../src/domain/valueObjects/Fee";
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { ArbitrageMathEngine } from "../src/application/ArbitrageMathEngine";
+import { ArbitrageMathEngine } from "../src/legacy/ArbitrageMathEngine";
 import { Amount } from "../src/domain/valueObjects/Amount";
 import { Fee } from "../src/domain/valueObjects/Fee";
 import { OrderBook } from "../src/domain/entities/OrderBook";

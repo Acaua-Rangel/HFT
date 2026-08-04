@@ -1,5 +1,5 @@
 import { describe, expect, it, mock, beforeEach, afterEach } from "bun:test";
-import { BinanceAutoScanner } from "../src/infrastructure/BinanceAutoScanner";
+import { BinanceAutoScanner } from "../src/legacy/BinanceAutoScanner";
 
 describe("BinanceAutoScanner", () => {
     let globalFetch: any;

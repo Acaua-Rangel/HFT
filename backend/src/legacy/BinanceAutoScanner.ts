@@ -1,7 +1,7 @@
 import { Currency } from "../domain/valueObjects/Currency";
 import { Pair } from "../domain/valueObjects/Pair";
-import { TriangularPairs } from "../application/TriangularPairs";
-import { PairTuple } from "../application/TriangularPairs";
+import { TriangularPairs } from "./TriangularPairs";
+import { PairTuple } from "./TriangularPairs";
 
 export class BinanceAutoScanner {
   public async scanTriangles(baseQuoteStr = "USDT", finalQuoteStr = "BRL"): Promise<TriangularPairs[]> {

@@ -25,73 +25,37 @@ export class Tick {
     return new Amount(0);
   }
 
-  // Comprando Base Asset gastando Quote Asset (VWAP)
-  public convertBuy(quoteAmount: Amount): Amount {
-    let quoteRemaining = 0;
-    quoteAmount.apply(v => quoteRemaining = v);
-    
-    let baseReceived = 0;
-
-    for (const level of this.asks) {
-      let levelPrice = 0;
-      let levelQty = 0;
-      level.price.apply(v => levelPrice = v);
-      level.qty.apply(v => levelQty = v);
-
-      const maxQuoteCanBuyHere = levelPrice * levelQty;
-
-      if (quoteRemaining <= maxQuoteCanBuyHere) {
-        // Enchemos nossa ordem neste nível
-        baseReceived += quoteRemaining / levelPrice;
-        quoteRemaining = 0;
-        break;
-      } else {
-        // Compramos tudo que tem neste nível e vamos para o próximo
-        baseReceived += levelQty;
-        quoteRemaining -= maxQuoteCanBuyHere;
-      }
+  public getMidPrice(): Amount | undefined {
+    if (this.asks.length > 0 && this.bids.length > 0 && this.asks[0] && this.bids[0]) {
+      let askPrice = 0, bidPrice = 0;
+      this.asks[0].price.apply(v => askPrice = v);
+      this.bids[0].price.apply(v => bidPrice = v);
+      return new Amount((askPrice + bidPrice) / 2);
     }
-
-    // Se varremos todo o livro e ainda sobrou cota, significa que a corretora não tem liquidez.
-    // Retornamos 0 ou negativo para o MathEngine rejeitar sumariamente.
-    if (quoteRemaining > 0) {
-       return new Amount(-9999999);
-    }
-
-    return new Amount(baseReceived);
+    return undefined;
   }
 
-  // Vendendo Base Asset para receber Quote Asset (VWAP)
+  // Comprando Base Asset gastando Quote Asset (Cruzando o Spread -> paga o Ask)
+  public convertBuy(quoteAmount: Amount): Amount {
+    if (this.asks.length === 0 || !this.asks[0]) return new Amount(-9999999);
+    
+    let askPrice = 0, quoteRemaining = 0;
+    this.asks[0].price.apply(v => askPrice = v);
+    quoteAmount.apply(v => quoteRemaining = v);
+    
+    if (askPrice === 0) return new Amount(-9999999);
+    return new Amount(quoteRemaining / askPrice);
+  }
+
+  // Vendendo Base Asset para receber Quote Asset (Cruzando o Spread -> recebe o Bid)
   public convertSell(baseAmount: Amount): Amount {
-    let baseRemaining = 0;
+    if (this.bids.length === 0 || !this.bids[0]) return new Amount(-9999999);
+
+    let bidPrice = 0, baseRemaining = 0;
+    this.bids[0].price.apply(v => bidPrice = v);
     baseAmount.apply(v => baseRemaining = v);
-
-    let quoteReceived = 0;
-
-    for (const level of this.bids) {
-      let levelPrice = 0;
-      let levelQty = 0;
-      level.price.apply(v => levelPrice = v);
-      level.qty.apply(v => levelQty = v);
-
-      if (baseRemaining <= levelQty) {
-        // Enchemos a nossa ordem neste nível
-        quoteReceived += baseRemaining * levelPrice;
-        baseRemaining = 0;
-        break;
-      } else {
-        // Vendemos tudo que tem neste nível e vamos para o próximo
-        quoteReceived += levelQty * levelPrice;
-        baseRemaining -= levelQty;
-      }
-    }
-
-    // Se faltar liquidez, inviabilizamos o trade.
-    if (baseRemaining > 0) {
-      return new Amount(-9999999);
-    }
-
-    return new Amount(quoteReceived);
+    
+    return new Amount(baseRemaining * bidPrice);
   }
 
   public applyBinanceSymbol(callback: (symbol: string) => void): void {
@@ -100,5 +64,9 @@ export class Tick {
 
   public applyTopAsk(callback: (level: Level | undefined) => void): void {
     callback(this.asks.length > 0 ? this.asks[0] : undefined);
+  }
+
+  public applyTopBid(callback: (level: Level | undefined) => void): void {
+    callback(this.bids.length > 0 ? this.bids[0] : undefined);
   }
 }

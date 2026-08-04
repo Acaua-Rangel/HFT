@@ -1,14 +1,14 @@
-import { ArbitrageCycle } from "../src/application/ArbitrageCycle";
-import { CycleEvaluator } from "../src/application/CycleEvaluator";
-import { CycleExecutor } from "../src/application/CycleExecutor";
-import { ArbitrageMathEngine } from "../src/application/ArbitrageMathEngine";
+import { ArbitrageCycle } from "../src/legacy/ArbitrageCycle";
+import { CycleEvaluator } from "../src/legacy/CycleEvaluator";
+import { CycleExecutor } from "../src/legacy/CycleExecutor";
+import { ArbitrageMathEngine } from "../src/legacy/ArbitrageMathEngine";
 import { LocalStateManager } from "../src/application/LocalStateManager";
-import { TriangularPairs, PairTuple } from "../src/application/TriangularPairs";
+import { TriangularPairs, PairTuple } from "../src/legacy/TriangularPairs";
 import { Currency } from "../src/domain/valueObjects/Currency";
-import { Pair } from "../domain/valueObjects/Pair";
-import { Amount } from "../domain/valueObjects/Amount";
-import { Fee } from "../domain/valueObjects/Fee";
-import { OrderFill } from "../domain/valueObjects/OrderFill";
+import { Pair } from "../src/domain/valueObjects/Pair";
+import { Amount } from "../src/domain/valueObjects/Amount";
+import { Fee } from "../src/domain/valueObjects/Fee";
+import { OrderFill } from "../src/domain/valueObjects/OrderFill";
 import { OrderExecutor } from "../src/domain/interfaces/OrderExecutor";
 
 // Mocks
@@ -16,10 +16,13 @@ const stateManager = new LocalStateManager();
 const mathEngine = new ArbitrageMathEngine();
 
 class MockExecutor implements OrderExecutor {
-  async executeMarketBuy(pair: Pair, amount: Amount): Promise<OrderFill> {
+  async executeMakerBuy(pair: Pair, amount: Amount): Promise<OrderFill> {
     return new OrderFill(amount, amount, new Amount(1), true);
   }
-  async executeMarketSell(pair: Pair, amount: Amount): Promise<OrderFill> {
+  async executeMakerSell(pair: Pair, amount: Amount): Promise<OrderFill> {
+    return new OrderFill(amount, amount, new Amount(1), true);
+  }
+  async executeIocSell(pair: Pair, amount: Amount, slippage?: number): Promise<OrderFill> {
     return new OrderFill(amount, amount, new Amount(1), true);
   }
   canExecuteBatch(count: number): boolean { return true; }

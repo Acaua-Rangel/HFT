@@ -144,7 +144,12 @@ export class ArbitrageCycle {
       return profit; // Return theoretical profit
     }
 
-    const fill = await this.executor.executeCycle(pairs, initialAmount, fee1, fee2);
+    const marginValidator = (newInitialAmount: Amount): boolean => {
+       const newProfit = this.evaluator.evaluate(pairs, fee1, fee2, fee3, newInitialAmount);
+       return mathEngine.isProfitable(newProfit, minProfit);
+    };
+
+    const fill = await this.executor.executeCycle(pairs, initialAmount, marginValidator);
     
     let actualProfit = profit;
     fill.apply((qty, quote, price, success) => {

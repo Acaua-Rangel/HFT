@@ -1,7 +1,7 @@
 import { BinanceWsClient } from "../src/infrastructure/BinanceWsClient";
 
 async function run() {
-  const wsClient = new BinanceWsClient();
+  const wsClient = new BinanceWsClient("key", "secret");
   await wsClient.connect();
   
   setTimeout(async () => {

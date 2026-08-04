@@ -129,10 +129,10 @@ export class BinanceWsClient {
   }
 
   private rejectAllPending(error: Error): void {
-    for (const [id, pending] of this.pendingRequests.entries()) {
+    Array.from(this.pendingRequests.entries()).forEach(([id, pending]) => {
       clearTimeout(pending.timeout);
       pending.reject(error);
-    }
+    });
     this.pendingRequests.clear();
   }
 }

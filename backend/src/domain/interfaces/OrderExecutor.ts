@@ -3,7 +3,8 @@ import { Pair } from "../valueObjects/Pair";
 import { OrderFill } from "../valueObjects/OrderFill";
 
 export interface OrderExecutor {
-  executeMarketBuy(pair: Pair, amount: Amount): Promise<OrderFill>;
-  executeMarketSell(pair: Pair, amount: Amount): Promise<OrderFill>;
+  executeMakerBuy(pair: Pair, amount: Amount, price?: Amount): Promise<OrderFill>;
+  executeMakerSell(pair: Pair, amount: Amount, price?: Amount): Promise<OrderFill>;
+  executeIocSell(pair: Pair, amount: Amount, slippageTolerance?: number): Promise<OrderFill>;
   canExecuteBatch(count: number): boolean;
 }

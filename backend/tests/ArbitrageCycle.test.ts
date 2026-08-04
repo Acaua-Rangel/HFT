@@ -1,7 +1,7 @@
 import { describe, expect, it, mock } from "bun:test";
-import { ArbitrageCycle } from "../src/application/ArbitrageCycle";
-import { CycleEvaluator } from "../src/application/CycleEvaluator";
-import { CycleExecutor } from "../src/application/CycleExecutor";
+import { ArbitrageCycle } from "../src/legacy/ArbitrageCycle";
+import { CycleEvaluator } from "../src/legacy/CycleEvaluator";
+import { CycleExecutor } from "../src/legacy/CycleExecutor";
 import { FeeFetcher } from "../src/domain/interfaces/FeeFetcher";
 import { MathEngine } from "../src/domain/interfaces/MathEngine";
 import { StateManager } from "../src/domain/interfaces/StateManager";
@@ -9,7 +9,7 @@ import { Amount } from "../src/domain/valueObjects/Amount";
 import { Fee } from "../src/domain/valueObjects/Fee";
 import { Pair } from "../src/domain/valueObjects/Pair";
 import { Currency } from "../src/domain/valueObjects/Currency";
-import { TriangularPairs, PairTuple } from "../src/application/TriangularPairs";
+import { TriangularPairs, PairTuple } from "../src/legacy/TriangularPairs";
 import { Tick } from "../src/domain/valueObjects/Tick";
 import { OrderFill } from "../src/domain/valueObjects/OrderFill";
 

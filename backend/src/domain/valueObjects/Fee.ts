@@ -19,6 +19,12 @@ export class Fee {
   }
 
   public withBnbDiscount(): Fee {
+    let p = 0;
+    this.percentage.apply(v => p = v);
+    if (p === 0) {
+      return this; // Se a taxa já é 0 (ex: FDUSD promo), não gasta BNB
+    }
+
     const discountFactor = new Amount(0.75);
     const newFee = new Fee(this.percentage.multiplyBy(discountFactor));
     newFee.isBnbPaid = true;

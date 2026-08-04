@@ -28,7 +28,7 @@ async function run() {
       return;
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     console.log("=== BINANCE SPOT BALANCES ===");
     const activeBalances = data.balances.filter((b: any) => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0);
     

@@ -15,7 +15,7 @@ async function run() {
   console.log("--- 1. Testando BinanceFeeFetcher (REST API) ---");
   const feeFetcher = new BinanceFeeFetcher();
   try {
-    const fee = await feeFetcher.fetchFeeFor(btcBrl);
+    const fee = await feeFetcher.getFeeFor(btcBrl);
     console.log(`✅ [SUCESSO] Taxa retornada pelo fetcher para o par BTCBRL. Valores internos:`, fee);
   } catch (error) {
     console.error(`❌ [ERRO INESPERADO] Falha no FeeFetcher:`, error);

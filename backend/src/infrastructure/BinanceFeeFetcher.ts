@@ -59,8 +59,11 @@ export class BinanceFeeFetcher implements FeeFetcher {
       const data: any = await response.json();
       if (Array.isArray(data)) {
         for (const item of data) {
-          if (item.symbol && item.takerCommission) {
-            const feeVal = parseFloat(item.takerCommission);
+          if (item.symbol && item.makerCommission) {
+            let feeVal = parseFloat(item.makerCommission);
+            if (item.symbol.toUpperCase().includes("FDUSD")) {
+              feeVal = 0;
+            }
             this.cache.set(item.symbol.toUpperCase(), new Fee(new Amount(feeVal)));
           }
         }
@@ -105,13 +108,16 @@ export class BinanceFeeFetcher implements FeeFetcher {
 
         if (response.ok) {
           const data: any = await response.json();
-          let takerFee = 0.001;
+          let makerFee = 0.001;
           if (Array.isArray(data) && data.length > 0) {
-            takerFee = parseFloat(data[0].takerCommission);
-          } else if (data.takerCommission) {
-            takerFee = parseFloat(data.takerCommission);
+            makerFee = parseFloat(data[0].makerCommission);
+          } else if (data.makerCommission) {
+            makerFee = parseFloat(data.makerCommission);
           }
-          this.cache.set(symbol, new Fee(new Amount(takerFee)));
+          if (symbol.toUpperCase().includes("FDUSD")) {
+            makerFee = 0;
+          }
+          this.cache.set(symbol, new Fee(new Amount(makerFee)));
         }
       } catch (e) {
         // Silent catch for background update

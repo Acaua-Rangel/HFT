@@ -29,7 +29,7 @@ setTimeout(() => {
 
 ingestor.onTick((tick: Tick) => {
   tick.applyBinanceSymbol(sym => {
-    counts[sym]++;
+    counts[sym] = (counts[sym] || 0) + 1;
   });
 });
 
