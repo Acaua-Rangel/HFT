@@ -197,7 +197,6 @@ export class BinanceOrderExecutor implements OrderExecutor {
     }
 
     if (accumulatedExecutedQty === 0) {
-       console.log(`[LIVE] ${side} order placed but cancelled unfilled (TTL expired). Price: ${lastPriceStr}, Qty: ${lastTruncatedQty}`);
        return OrderFill.failed();
     }
 
