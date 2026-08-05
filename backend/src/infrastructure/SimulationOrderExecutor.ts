@@ -175,8 +175,15 @@ export class SimulationOrderExecutor implements OrderExecutor {
 
                 // ---- Step 7: Apply trading fee ----
                 let isFdusd = false;
-                pair.applyCurrencies((b, q) => q.applySymbol(s => isFdusd = s.toUpperCase() === "FDUSD"));
-                const feeRate = isFdusd ? 0 : (this.bnbDiscountEnabled
+                let baseSym = "";
+                pair.applyCurrencies((b, q) => {
+                   b.applySymbol(s => baseSym = s.toUpperCase());
+                   q.applySymbol(s => isFdusd = s.toUpperCase() === "FDUSD");
+                });
+                const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
+                const isZeroFeePromo = isFdusd && zeroFeePromoBases.includes(baseSym);
+                
+                const feeRate = isZeroFeePromo ? 0 : (this.bnbDiscountEnabled
                     ? this.BASE_FEE_RATE * (1 - this.BNB_DISCOUNT)  // 0.075%
                     : this.BASE_FEE_RATE);                            // 0.1%
 

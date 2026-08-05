@@ -201,7 +201,14 @@ async function startHftEngine() {
                 }
                 
                 const bnbEnabled = currentMode === "LIVE" ? !isBnbDiscountLocked : simExecutor.bnbDiscountEnabled;
-                const feeRate = quoteSym === "FDUSD" ? 0 : (bnbEnabled ? 0.00075 : 0.001);
+                
+                // Binance Zero Maker Fee Promotion for specific FDUSD pairs
+                let baseSym = "";
+                mmPair.applyCurrencies((b, q) => b.applySymbol(s => baseSym = s.toUpperCase()));
+                const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
+                const isZeroFeePromo = quoteSym === "FDUSD" && zeroFeePromoBases.includes(baseSym);
+                
+                const feeRate = isZeroFeePromo ? 0 : (bnbEnabled ? 0.00075 : 0.001);
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
 
                 await mmCycle.executeTick(mmPair, feeRate, volatilityPct);
