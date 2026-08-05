@@ -174,9 +174,11 @@ export class SimulationOrderExecutor implements OrderExecutor {
                 const filledQuote = filledQty * roundedPrice;
 
                 // ---- Step 7: Apply trading fee ----
-                const feeRate = this.bnbDiscountEnabled
+                let isFdusd = false;
+                pair.applyCurrencies((b, q) => q.applySymbol(s => isFdusd = s.toUpperCase() === "FDUSD"));
+                const feeRate = isFdusd ? 0 : (this.bnbDiscountEnabled
                     ? this.BASE_FEE_RATE * (1 - this.BNB_DISCOUNT)  // 0.075%
-                    : this.BASE_FEE_RATE;                            // 0.1%
+                    : this.BASE_FEE_RATE);                            // 0.1%
 
                 let feeInQuote = 0;
                 
