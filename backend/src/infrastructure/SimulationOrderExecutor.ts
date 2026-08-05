@@ -22,12 +22,8 @@ export class SimulationOrderExecutor implements OrderExecutor {
     // Virtual balances managed internally
     private _baseBalance: number = 0;
     private _quoteBalance: number = 0;
-    private _bnbBalance: number = 0;
-
-    // Fee simulation: Binance charges 0.1% maker fee, 25% discount with BNB
+    // Fee simulation: Binance charges 0.1% maker fee (or 0% for FDUSD)
     private readonly BASE_FEE_RATE = 0.001;   // 0.1%
-    private readonly BNB_DISCOUNT = 0.25;      // 25% off
-    public bnbDiscountEnabled: boolean = false;
     public totalFeesCollected: number = 0;     // Track total fees for telemetry
 
     constructor(
@@ -40,15 +36,12 @@ export class SimulationOrderExecutor implements OrderExecutor {
     // --- Public getters for balance access from index.ts ---
     public get baseBalance(): number { return this._baseBalance; }
     public get quoteBalance(): number { return this._quoteBalance; }
-    public get bnbBalance(): number { return this._bnbBalance; }
-    public setBnbBalance(amount: number): void { this._bnbBalance = amount; }
 
     // --- Initialize virtual balances (called when switching to SIM mode) ---
-    public setInitialBalances(base: number, quote: number, bnb: number = 0): void {
+    public setInitialBalances(base: number, quote: number): void {
         this._baseBalance = base;
         this._quoteBalance = quote;
-        this._bnbBalance = bnb;
-        console.log(`🧪 [SIM] Balances initialized: Base=${base}, Quote=${quote}, BNB=${bnb}`);
+        console.log(`🧪 [SIM] Balances initialized: Base=${base}, Quote=${quote}`);
     }
 
     public canExecuteBatch(count: number): boolean {
@@ -182,52 +175,21 @@ export class SimulationOrderExecutor implements OrderExecutor {
                 });
                 const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
                 const isZeroFeePromo = isFdusd && zeroFeePromoBases.includes(baseSym);
-                
-                const feeRate = isZeroFeePromo ? 0 : (this.bnbDiscountEnabled
-                    ? this.BASE_FEE_RATE * (1 - this.BNB_DISCOUNT)  // 0.075%
-                    : this.BASE_FEE_RATE);                            // 0.1%
+                const feeRate = isZeroFeePromo ? 0 : this.BASE_FEE_RATE;
 
                 let feeInQuote = 0;
                 
-                // Binance deducts fee from the RECEIVED asset (if not using BNB)
+                // Binance deducts fee from the RECEIVED asset
                 if (side === "BUY") {
                     this._quoteBalance -= filledQuote;
-                    if (this.bnbDiscountEnabled) {
-                        this._baseBalance += filledQty;
-                        feeInQuote = filledQty * roundedPrice * feeRate;
-                    } else {
-                        const feeBase = filledQty * feeRate;
-                        this._baseBalance += (filledQty - feeBase);
-                        feeInQuote = feeBase * roundedPrice;
-                    }
+                    const feeBase = filledQty * feeRate;
+                    this._baseBalance += (filledQty - feeBase);
+                    feeInQuote = feeBase * roundedPrice;
                 } else {
                     this._baseBalance -= filledQty;
-                    if (this.bnbDiscountEnabled) {
-                        this._quoteBalance += filledQuote;
-                        feeInQuote = filledQuote * feeRate;
-                    } else {
-                        const feeQuote = filledQuote * feeRate;
-                        this._quoteBalance += (filledQuote - feeQuote);
-                        feeInQuote = feeQuote;
-                    }
-                }
-
-                if (this.bnbDiscountEnabled) {
-                    // Try to fetch BNB price to deduct from BNB balance
-                    let bnbQuotePrice = 0;
-                    let quoteSym = "";
-                    pair.applyCurrencies((b, q) => q.applySymbol(s => quoteSym = s.toUpperCase()));
-                    // Create dummy pair for state manager lookup (e.g., BNBUSDT)
-                    const bnbPair = new Pair({ applySymbol: (cb: any) => cb("BNB") } as any, pair.quote);
-                    const bnbBook = this.stateManager.retrieveOrderBook(bnbPair);
-                    if (bnbBook) {
-                        const tick = bnbBook.getLatest();
-                        if (tick) tick.getMidPrice()?.apply(v => bnbQuotePrice = v);
-                    }
-                    if (bnbQuotePrice > 0) {
-                        const bnbFee = feeInQuote / bnbQuotePrice;
-                        this._bnbBalance -= bnbFee;
-                    }
+                    const feeQuote = filledQuote * feeRate;
+                    this._quoteBalance += (filledQuote - feeQuote);
+                    feeInQuote = feeQuote;
                 }
 
                 this.totalFeesCollected += feeInQuote;

@@ -58,8 +58,7 @@ const simBalanceFetcher = new SimulationBalanceFetcher(simExecutor);
 
 const volatilityMonitor = new VolatilityMonitor(stateManager);
 const liquidityMonitor = new LiquidityMonitor(stateManager);
-let globalBnbBalance = 0;
-let isBnbDiscountLocked = false;
+
 const circuitBreaker = new CircuitBreaker(volatilityMonitor, liquidityMonitor, () => currentLatency);
 const inventoryManager = new InventoryManager();
 
@@ -95,16 +94,10 @@ async function startHftEngine() {
     
     await precisionFetcher.preloadPrecisions();
 
-    let quoteSym = "";
-    mmPair.applyCurrencies((b, q) => q.applySymbol(s => quoteSym = s.toUpperCase()));
-    const bnbPair = new Pair(new Currency("BNB"), new Currency(quoteSym));
-    if (quoteSym !== "BNB") {
-        stateManager.registerPair(bnbPair);
-        ingestor.subscribe(bnbPair);
-    }
+
 
     // Initialize simulation with a default balance
-    simExecutor.setInitialBalances(0, 1000, 1.0); // 1.0 BNB by default to test lock
+    simExecutor.setInitialBalances(0, 1000);
 
     // Balance update loop — reads from the appropriate source based on mode
     // Dedicated latency monitor (real ping to Binance API)
@@ -141,13 +134,12 @@ async function startHftEngine() {
                         if (quoteAmount) quoteAmount.apply(val => quoteBal = val);
                     });
                 });
-                const bnbAmount = balances.get("BNB");
-                if (bnbAmount) bnbAmount.apply(val => globalBnbBalance = val);
+
             } else {
                 // SIMULATION: read virtual balances from SimulationOrderExecutor
                 baseBal = simExecutor.baseBalance;
                 quoteBal = simExecutor.quoteBalance;
-                globalBnbBalance = simExecutor.bnbBalance;
+
             }
             
             inventoryManager.baseBalance = baseBal;
@@ -164,51 +156,18 @@ async function startHftEngine() {
 
         await evaluationLock.runIfUnlocked(async () => {
             try {
-                let quoteSym = "";
-                mmPair.applyCurrencies((b, q) => { q.applySymbol(s => quoteSym = s.toUpperCase()); });
-                
-                // BNB Fee Protection Calculation
-                if (quoteSym !== "BNB") {
-                    let bnbQuotePrice = 0;
-                    const bnbPairObj = new Pair(new Currency("BNB"), new Currency(quoteSym));
-                    const bnbBook = stateManager.retrieveOrderBook(bnbPairObj);
-                    if (bnbBook) {
-                        const bnbTick = bnbBook.getLatest();
-                        if (bnbTick) bnbTick.getMidPrice()?.apply(v => bnbQuotePrice = v);
-                    }
-
-                    if (bnbQuotePrice > 0) {
-                        const baseLotQuote = mmCycle.lotConfig.mode === "PERCENTAGE" 
-                            ? inventoryManager.quoteBalance * mmCycle.lotConfig.value 
-                            : mmCycle.lotConfig.value;
-                        // Estimate fee for 1 Buy and 1 Sell
-                        const estimatedQuoteFee = (baseLotQuote * 2) * 0.00075; 
-                        const bnbRequired = estimatedQuoteFee / bnbQuotePrice;
-                        
-                        if (bnbRequired > globalBnbBalance) {
-                            if (!isBnbDiscountLocked) {
-                                console.log(`🔒 BNB Fee Lock Triggered! Req: ${bnbRequired.toFixed(5)} BNB | Bal: ${globalBnbBalance.toFixed(5)} BNB | Lot: ${baseLotQuote.toFixed(2)} | BnbPx: ${bnbQuotePrice.toFixed(2)}`);
-                            }
-                            simExecutor.bnbDiscountEnabled = false;
-                            isBnbDiscountLocked = true;
-                        } else {
-                            if (isBnbDiscountLocked) {
-                                console.log(`🔓 BNB Fee Lock Released. Req: ${bnbRequired.toFixed(5)} BNB | Bal: ${globalBnbBalance.toFixed(5)} BNB`);
-                            }
-                            isBnbDiscountLocked = false;
-                        }
-                    }
-                }
-                
-                const bnbEnabled = currentMode === "LIVE" ? !isBnbDiscountLocked : simExecutor.bnbDiscountEnabled;
-                
                 // Binance Zero Maker Fee Promotion for specific FDUSD pairs
+                let quoteSym = "";
                 let baseSym = "";
-                mmPair.applyCurrencies((b, q) => b.applySymbol(s => baseSym = s.toUpperCase()));
+                mmPair.applyCurrencies((b, q) => {
+                    b.applySymbol(s => baseSym = s.toUpperCase());
+                    q.applySymbol(s => quoteSym = s.toUpperCase());
+                });
+                
                 const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
                 const isZeroFeePromo = quoteSym === "FDUSD" && zeroFeePromoBases.includes(baseSym);
                 
-                const feeRate = isZeroFeePromo ? 0 : (bnbEnabled ? 0.00075 : 0.001);
+                const feeRate = isZeroFeePromo ? 0 : 0.001;
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
 
                 await mmCycle.executeTick(mmPair, feeRate, volatilityPct);
@@ -290,9 +249,7 @@ const server = Bun.serve({
                     maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
                     errors: latestErrors,
                     lotMode: mmCycle.lotConfig.mode,
-                    lotValue: mmCycle.lotConfig.value,
-                    bnbDiscountLocked: isBnbDiscountLocked,
-                    bnbBalance: globalBnbBalance
+                    lotValue: mmCycle.lotConfig.value
                 }));
             } else if (data.type === "UPDATE_MM_PARAMS") {
                 if (data.gamma !== undefined) inventoryManager.GAMMA = data.gamma;
@@ -303,11 +260,6 @@ const server = Bun.serve({
                 if (data.mode !== undefined) mmCycle.lotConfig.mode = data.mode;
                 if (data.value !== undefined) mmCycle.lotConfig.value = data.value;
                 console.log(`🔧 Updated Lot Config: Mode=${mmCycle.lotConfig.mode}, Value=${mmCycle.lotConfig.value}`);
-            } else if (data.type === "SET_BNB_DISCOUNT") {
-                if (!isBnbDiscountLocked) {
-                    simExecutor.bnbDiscountEnabled = data.enabled === true;
-                    console.log(`🧪 [SIM] BNB Discount: ${simExecutor.bnbDiscountEnabled ? 'ON (-25% fee)' : 'OFF (standard fee)'}`);
-                }
             }
         } catch(e) {}
     },
@@ -336,23 +288,13 @@ setInterval(() => {
     let baseSym = ""; let quoteSym = "";
     mmPair.applyCurrencies((b, q) => { b.applySymbol(s => baseSym = s); q.applySymbol(s => quoteSym = s); });
 
-    const bnbEnabled = simExecutor.bnbDiscountEnabled;
-    const feeRate = quoteSym === "FDUSD" ? 0 : (bnbEnabled ? 0.00075 : 0.001);
+    const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
+    const isZeroFeePromo = quoteSym === "FDUSD" && zeroFeePromoBases.includes(baseSym);
+    
+    const feeRate = isZeroFeePromo ? 0 : 0.001;
     const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
 
     const quotes = inventoryManager.getQuotes(midPrice, feeRate, volatilityPct);
-
-    let bnbPrice = 0;
-    if (quoteSym !== "BNB") {
-        const bnbPairObj = new Pair(new Currency("BNB"), new Currency(quoteSym));
-        const bnbBook = stateManager.retrieveOrderBook(bnbPairObj);
-        if (bnbBook) {
-            const bnbTick = bnbBook.getLatest();
-            if (bnbTick) bnbTick.getMidPrice()?.apply(v => bnbPrice = v);
-        }
-    } else {
-        bnbPrice = 1.0;
-    }
 
     server.publish("dashboard", JSON.stringify({
         type: "TELEMETRY",
@@ -364,15 +306,12 @@ setInterval(() => {
         reservationPrice: quotes.reservationPrice,
         baseBalance: inventoryManager.baseBalance,
         quoteBalance: inventoryManager.quoteBalance,
-        bnbBalance: globalBnbBalance,
-        bnbPrice: bnbPrice,
         baseSymbol: baseSym,
         quoteSymbol: quoteSym,
         gamma: inventoryManager.GAMMA,
         baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
         maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
         latency: currentLatency,
-        bnbDiscount: simExecutor.bnbDiscountEnabled,
         totalFees: simExecutor.totalFeesCollected,
         effectiveSpread: quotes.effectiveSpread,
         minSpreadFloor: quotes.minSpreadFloor,

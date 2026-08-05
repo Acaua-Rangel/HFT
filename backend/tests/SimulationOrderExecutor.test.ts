@@ -19,11 +19,10 @@ describe("SimulationOrderExecutor", () => {
         
         const executor = new SimulationOrderExecutor(errorRepo, txRepo, precisionFetcher, stateManager);
         
-        executor.setInitialBalances(2, 10000, 10);
+        executor.setInitialBalances(2, 10000);
         
         expect(executor.baseBalance).toBe(2);
         expect(executor.quoteBalance).toBe(10000);
-        expect(executor.bnbBalance).toBe(10);
     });
 
     it("should allow batch execution", () => {
