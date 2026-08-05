@@ -383,32 +383,7 @@ function App() {
               ⚡ LIVE
             </div>
           </div>
-          <div 
-            className={`bnb-discount-toggle ${bnbDiscount ? 'active' : ''} ${bnbDiscountLocked ? 'locked' : ''}`}
-            style={{ opacity: bnbDiscountLocked ? 0.5 : 1, cursor: bnbDiscountLocked ? 'not-allowed' : 'pointer' }}
-            onClick={() => {
-              if (bnbDiscountLocked) return;
-              lastBnbToggleTime.current = Date.now();
-              const newValue = !bnbDiscount;
-              setBnbDiscount(newValue);
-              bnbDiscountRef.current = newValue;
-              if (wsRef.current?.readyState === WebSocket.OPEN) {
-                wsRef.current.send(JSON.stringify({ type: "SET_BNB_DISCOUNT", enabled: newValue }));
-              }
-            }}
-          >
-            <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <div style={{ display: 'flex', alignItems: 'center' }}>
-                <div className="bnb-toggle-switch">
-                  <div className="bnb-toggle-knob"></div>
-                </div>
-                <span>BNB Fee Discount {bnbDiscount ? '(-25%)' : ''}</span>
-              </div>
-              {bnbDiscountLocked && (
-                <span style={{ fontSize: '10px', color: '#ef4444', marginTop: '4px' }}>⚠️ Insufficient BNB Balance</span>
-              )}
-            </div>
-          </div>
+
           {!isRunning ? (
             <button className="btn btn-start" onClick={() => {
               setIsRunning(true);
@@ -595,36 +570,7 @@ function App() {
           </div>
         </div>
 
-        <div className="glass-panel metric-card">
-          <div className="panel-title">
-            {tradingMode === 'SIMULATION' ? `BNB Balance (Sim)` : `BNB Balance (Live)`}
-            {tradingMode === 'SIMULATION' && (
-              <span className="edit-sim-balance" onClick={() => {
-                setIsEditingSimBnbBalance(!isEditingSimBnbBalance);
-                if (!isEditingSimBnbBalance) setSimBnbBalanceInput(bnbBalance?.toString() || simBnbBalance.toString());
-              }}>
-                ✏️
-              </span>
-            )}
-          </div>
-          <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
-            {tradingMode === 'SIMULATION' && isEditingSimBnbBalance ? (
-              <div className="sim-balance-edit-container">
-                <input 
-                  type="number" 
-                  className="sim-balance-edit"
-                  value={simBnbBalanceInput} 
-                  onChange={e => setSimBnbBalanceInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSimBnbBalanceSubmit()}
-                  autoFocus
-                />
-                <span className="sim-balance-confirm" onClick={handleSimBnbBalanceSubmit}>✔️</span>
-              </div>
-            ) : (
-              bnbBalance !== null ? `${bnbBalance.toFixed(4)}` : '--'
-            )}
-          </div>
-        </div>
+
         <div className="glass-panel metric-card">
           <div className="panel-title">Network Latency (NY4)</div>
           <div className="metric-value" style={{ color: latency !== null && latency < 10 ? 'var(--color-up)' : '#eab308' }}>
@@ -635,7 +581,7 @@ function App() {
           <div className="panel-title">Total Wealth (Est. {telemetry?.quoteSymbol || 'Quote'})</div>
           <div className="metric-value" style={{ color: '#3b82f6' }}>
              {(balance !== null && telemetry?.midPrice !== undefined && telemetry?.baseBalance !== undefined) 
-               ? `${telemetry.quoteSymbol === 'USDT' || telemetry.quoteSymbol === 'FDUSD' ? '$' : 'R$'} ${((telemetry.baseBalance * telemetry.midPrice) + balance + (telemetry.bnbBalance !== undefined && telemetry.bnbPrice !== undefined ? (telemetry.bnbBalance * telemetry.bnbPrice) : 0)).toFixed(2)}` 
+               ? `${telemetry.quoteSymbol === 'USDT' || telemetry.quoteSymbol === 'FDUSD' ? '$' : 'R$'} ${((telemetry.baseBalance * telemetry.midPrice) + balance).toFixed(2)}` 
                : '--'}
           </div>
         </div>
