@@ -68,8 +68,8 @@ const mmCycle = new MarketMakerCycle(stateManager, circuitBreaker, inventoryMana
 
 // Define Target Pair
 const btc = new Currency("BTC");
-const brl = new Currency("BRL");
-const mmPair = new Pair(btc, brl);
+const fdusd = new Currency("FDUSD");
+const mmPair = new Pair(btc, fdusd);
 
 // --- Mode Switching Logic ---
 function switchMode(newMode: "LIVE" | "SIMULATION", simQuoteBalance?: number) {
