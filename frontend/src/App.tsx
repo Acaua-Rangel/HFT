@@ -452,6 +452,58 @@ function App() {
       </div>
 
       <div className="dashboard-grid">
+        <div className="glass-panel orderbook-panel">
+          <div className="panel-title">Live Orderbook ({debouncedPair.toUpperCase().replace('BRL', '/BRL').replace('USDT', '/USDT').replace('FDUSD', '/FDUSD')})</div>
+          <div className="orderbook-container">
+            <table className="orderbook-table">
+              <thead>
+                <tr>
+                  <th>Price</th>
+                  <th>Size</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orderbook.asks.map((ask, idx) => (
+                  <tr key={`ask-${idx}`}>
+                    <td className="price-ask">{formatPrice(ask.price)}</td>
+                    <td>{ask.size}</td>
+                    <td>
+                      {ask.total}
+                      <div 
+                        className="size-bar ask" 
+                        style={{ width: `${(ask.total / maxTotal) * 100}%` }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            
+            <div className="orderbook-spread">
+              Spread: {formatPrice((orderbook.asks[orderbook.asks.length - 1]?.price || 0) - (orderbook.bids[0]?.price || 0))}
+            </div>
+
+            <table className="orderbook-table">
+              <tbody>
+                {orderbook.bids.map((bid, idx) => (
+                  <tr key={`bid-${idx}`}>
+                    <td className="price-bid">{formatPrice(bid.price)}</td>
+                    <td>{bid.size}</td>
+                    <td>
+                      {bid.total}
+                      <div 
+                        className="size-bar bid" 
+                        style={{ width: `${(bid.total / maxTotal) * 100}%` }}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <div className="metrics-row">
           <div className="glass-panel metric-card">
             <div className="panel-title">Inventory Skew (q)</div>
@@ -547,57 +599,6 @@ function App() {
                  ? `${telemetry.quoteSymbol === 'USDT' || telemetry.quoteSymbol === 'FDUSD' ? '$' : 'R$'} ${((telemetry.baseBalance * telemetry.midPrice) + balance).toFixed(2)}` 
                  : '--'}
             </div>
-          </div>
-        </div>
-        <div className="glass-panel orderbook-panel">
-          <div className="panel-title">Live Orderbook ({debouncedPair.toUpperCase().replace('BRL', '/BRL').replace('USDT', '/USDT')})</div>
-          <div className="orderbook-container">
-            <table className="orderbook-table">
-              <thead>
-                <tr>
-                  <th>Price</th>
-                  <th>Size</th>
-                  <th>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {orderbook.asks.map((ask, idx) => (
-                  <tr key={`ask-${idx}`}>
-                    <td className="price-ask">{formatPrice(ask.price)}</td>
-                    <td>{ask.size}</td>
-                    <td>
-                      {ask.total}
-                      <div 
-                        className="size-bar ask" 
-                        style={{ width: `${(ask.total / maxTotal) * 100}%` }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            
-            <div className="orderbook-spread">
-              Spread: {formatPrice((orderbook.asks[orderbook.asks.length - 1]?.price || 0) - (orderbook.bids[0]?.price || 0))}
-            </div>
-
-            <table className="orderbook-table">
-              <tbody>
-                {orderbook.bids.map((bid, idx) => (
-                  <tr key={`bid-${idx}`}>
-                    <td className="price-bid">{formatPrice(bid.price)}</td>
-                    <td>{bid.size}</td>
-                    <td>
-                      {bid.total}
-                      <div 
-                        className="size-bar bid" 
-                        style={{ width: `${(bid.total / maxTotal) * 100}%` }}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
         </div>
 
