@@ -18,37 +18,6 @@ const formatPrice = (value: number) => {
   }).format(value);
 };
 
-const PnlChart = ({ data }: { data: number[] }) => {
-  if (data.length < 2) return null;
-  const min = Math.min(...data);
-  const max = Math.max(...data);
-  const range = max - min || 1;
-  const width = 100;
-  const height = 100;
-  
-  const points = data.map((d, i) => {
-    const x = (i / (data.length - 1)) * width;
-    const y = height - ((d - min) / range) * height;
-    return `${x},${y}`;
-  }).join(' ');
-
-  return (
-    <svg viewBox="0 -5 100 110" preserveAspectRatio="none" style={{ width: '100%', height: 'calc(100% - 40px)', marginTop: '40px', boxSizing: 'border-box', overflow: 'visible' }}>
-      <polyline
-        fill="none"
-        stroke="#10b981"
-        strokeWidth="3"
-        points={points}
-        vectorEffect="non-scaling-stroke"
-      />
-      <path
-        fill="rgba(16, 185, 129, 0.1)"
-        d={`M0,100 L${points} L100,100 Z`}
-      />
-    </svg>
-  );
-};
-
 
 const SkewGraph = ({ telemetry }: { telemetry: any }) => {
   if (!telemetry || !telemetry.midPrice || telemetry.bid === 0) return (
@@ -112,8 +81,7 @@ function App() {
   
   const [isRunning, setIsRunning] = useState(false);
   const [orderbook, setOrderbook] = useState<{ asks: OrderBookEntry[], bids: OrderBookEntry[] }>({ asks: [], bids: [] });
-  const [pnl, setPnl] = useState<number | null>(null);
-  const [pnlHistory, setPnlHistory] = useState<number[]>([]);
+
   const [latency, setLatency] = useState<number | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
   const [simBalance, setSimBalance] = useState<number>(1000);
@@ -138,7 +106,7 @@ function App() {
     return () => clearTimeout(timer);
   }, [activePair]);
 
-  const pnlRef = useRef(pnl);
+
   const wsRef = useRef<WebSocket | null>(null);
   const bnbDiscountRef = useRef(bnbDiscount);
   const lastBnbToggleTime = useRef<number>(0);
@@ -158,18 +126,7 @@ function App() {
         try {
           const data = JSON.parse(event.data);
           if (data.type === 'UPDATE') {
-            if (data.pnl !== undefined) {
-              const newPnl = data.pnl;
-              if (pnlRef.current !== null) {
-              }
-              setPnl(newPnl);
-              pnlRef.current = newPnl;
-              setPnlHistory(prev => {
-                const newHistory = [...prev, newPnl];
-                if (newHistory.length > 200) newHistory.shift();
-                return newHistory;
-              });
-            }
+
             if (data.latency) setLatency(data.latency);
             if (data.balance !== undefined) setBalance(data.balance);
             if (data.mode !== undefined) setTradingMode(data.mode);
@@ -668,14 +625,7 @@ function App() {
           </div>
         )}
 
-        <div className="glass-panel chart-panel">
-          <div className="panel-title" style={{ position: 'absolute', top: '20px', left: '20px', zIndex: 10 }}>
-            Performance Matrix (Real-time PnL)
-          </div>
-          <div style={{ width: '100%', height: '100%', position: 'relative' }}>
-            <PnlChart data={pnlHistory} />
-          </div>
-        </div>
+
       </div>
     </div>
   );
