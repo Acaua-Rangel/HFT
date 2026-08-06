@@ -73,7 +73,7 @@ const InfoTooltip = ({ text }: { text: string }) => (
 
 function App() {
   const [gamma, setGamma] = useState<number>(0.1);
-  const [baseSpreadPct, setBaseSpreadPct] = useState<number>(0.001);
+
   const [maxInventorySkew, setMaxInventorySkew] = useState<number>(0.4);
   const [telemetry, setTelemetry] = useState<any>(null);
   const [lotMode, setLotMode] = useState<"PERCENTAGE" | "FIXED">("PERCENTAGE");
@@ -136,14 +136,14 @@ function App() {
             if (data.balance !== undefined) setBalance(data.balance);
             if (data.bnbBalance !== undefined) setBnbBalance(data.bnbBalance);
             if (data.gamma !== undefined) setGamma(data.gamma);
-            if (data.baseSpreadPct !== undefined) setBaseSpreadPct(data.baseSpreadPct);
+
             if (data.maxInventorySkew !== undefined) setMaxInventorySkew(data.maxInventorySkew);
             if (data.bnbDiscountLocked !== undefined) setBnbDiscountLocked(data.bnbDiscountLocked);
                     } else if (data.type === 'TELEMETRY') {
             setTelemetry(data);
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.gamma !== undefined) setGamma(data.gamma);
-            if (data.baseSpreadPct !== undefined) setBaseSpreadPct(data.baseSpreadPct);
+
             if (data.maxInventorySkew !== undefined) setMaxInventorySkew(data.maxInventorySkew);
             if (data.lotMode !== undefined) setLotMode(data.lotMode);
             if (data.lotValue !== undefined) setLotValue(data.lotValue);
@@ -384,36 +384,6 @@ function App() {
               }} style={{ width: '100%', accentColor: '#3b82f6' }} />
             </div>
             
-            <div className="control-group" style={{ marginBottom: '15px' }}>
-              <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                <span style={{ display: 'flex', alignItems: 'center' }}>
-                  Base Spread Target:
-                  <InfoTooltip text="A margem de lucro mínima desejada sobre o preço médio. Se a taxa da corretora for maior que isso, o sistema ativará o 'Fee-Aware Floor' para não operar no prejuízo." />
-                </span>
-                <strong>{(baseSpreadPct * 100).toFixed(3)}%</strong>
-              </label>
-              <input type="range" min="0.0001" max="0.01" step="0.0001" value={baseSpreadPct} onChange={(e) => {
-                const val = parseFloat(e.target.value);
-                setBaseSpreadPct(val);
-                wsRef.current?.send(JSON.stringify({ type: "UPDATE_MM_PARAMS", baseSpreadPct: val }));
-              }} style={{ width: '100%', accentColor: '#3b82f6' }} />
-              
-              <div style={{ marginTop: '8px', padding: '8px', background: 'rgba(0,0,0,0.3)', borderRadius: '6px', fontSize: '11px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', textAlign: 'center' }}>
-                <div>
-                  <div style={{ color: '#888', marginBottom: '2px' }}>Fee-Aware Floor</div>
-                  <div style={{ color: '#eab308', fontWeight: 'bold' }}>{telemetry?.minSpreadFloor !== undefined ? (telemetry.minSpreadFloor * 100).toFixed(3) : '--'}%</div>
-                </div>
-                <div>
-                  <div style={{ color: '#888', marginBottom: '2px' }}>Market Volatility</div>
-                  <div style={{ color: '#ef4444', fontWeight: 'bold' }}>{telemetry?.volatilityPct !== undefined ? (telemetry.volatilityPct * 100).toFixed(4) : '--'}%</div>
-                </div>
-                <div>
-                  <div style={{ color: '#10b981', marginBottom: '2px' }}>Effective Spread</div>
-                  <div style={{ color: '#10b981', fontWeight: 'bold' }}>{telemetry?.effectiveSpread !== undefined ? (telemetry.effectiveSpread * 100).toFixed(3) : '--'}%</div>
-                </div>
-              </div>
-            </div>
-
             <div className="control-group">
               <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <span style={{ display: 'flex', alignItems: 'center' }}>
