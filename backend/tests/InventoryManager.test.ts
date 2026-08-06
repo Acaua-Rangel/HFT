@@ -34,9 +34,10 @@ describe("InventoryManager", () => {
         balancedIm.baseBalance = 0.5;
         balancedIm.quoteBalance = 50;
         
-        const feeRate = 0; // Disable fee floor for clear asymmetric test
-        const longQuotes = im.getQuotes(100, feeRate);
-        const balancedQuotes = balancedIm.getQuotes(100, feeRate);
+        const feeRate = 0;
+        const vol = 0.002; // Need some volatility for adaptive spread to give room
+        const longQuotes = im.getQuotes(100, feeRate, vol);
+        const balancedQuotes = balancedIm.getQuotes(100, feeRate, vol);
         
         expect(longQuotes.q).toBeGreaterThan(0);
         expect(longQuotes.bid).toBeLessThan(balancedQuotes.bid);
@@ -53,8 +54,9 @@ describe("InventoryManager", () => {
         balancedIm.quoteBalance = 50;
         
         const feeRate = 0;
-        const shortQuotes = im.getQuotes(100, feeRate);
-        const balancedQuotes = balancedIm.getQuotes(100, feeRate);
+        const vol = 0.002; // Need some volatility for adaptive spread to give room
+        const shortQuotes = im.getQuotes(100, feeRate, vol);
+        const balancedQuotes = balancedIm.getQuotes(100, feeRate, vol);
         
         expect(shortQuotes.q).toBeLessThan(0);
         expect(shortQuotes.bid).toBeGreaterThan(balancedQuotes.bid);

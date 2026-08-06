@@ -1,15 +1,50 @@
 export class InventoryManager {
     // We use a simplified Avellaneda-Stoikov where risk aversion shifts the reservation price.
-    public GAMMA = 0.1; // Risk aversion
+    public GAMMA = 0.1; // Risk aversion (inventory penalty)
     public MAX_INVENTORY_SKEW = 0.40; // 0.5 + 0.4 = 90% (Pause quoting side if exceeded)
-    public BASE_SPREAD_PCT = 0.001; // 0.1% baseline spread
+
+    // Adaptive Spread Parameters (all auto-calculated, no manual input needed)
+    // SAFETY_MULTIPLIER: How many times the measured volatility the spread must cover.
+    // At 3.0x, if volatility is 0.02%, spread = 0.06%. This covers ~99.7% of price movements (3-sigma).
+    public SAFETY_MULTIPLIER = 3.0;
+    // ABSOLUTE_MIN_SPREAD: Hard floor to prevent zero-spread in dead markets (0.01% = 1 basis point)
+    public ABSOLUTE_MIN_SPREAD = 0.0001;
+
+    // Legacy field kept for dashboard compatibility — now auto-calculated, not used as primary spread
+    public BASE_SPREAD_PCT = 0.001;
 
     public baseBalance: number = 0;
     public quoteBalance: number = 0;
 
     constructor() {}
 
-    public getQuotes(midPrice: number, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false, bestBid: number = 0, bestAsk: number = 0): { bid: number, ask: number, bidEnabled: boolean, askEnabled: boolean, q: number, reservationPrice: number, effectiveSpread: number, minSpreadFloor: number, bidDistancePct: number, askDistancePct: number, bidDistanceAbs: number, askDistanceAbs: number } {
+    /**
+     * Calculates adaptive spread and quote prices based on real-time market data.
+     * 
+     * The spread is computed as:
+     *   spread = max(
+     *     ABSOLUTE_MIN_SPREAD,              // Hard floor (0.01%)
+     *     2 * feeRate * 1.5,                // Fee floor: covers round-trip fees + 50% margin
+     *     SAFETY_MULTIPLIER * volatilityPct  // Volatility floor: covers price risk during holding period
+     *   )
+     * 
+     * This guarantees that the spread ALWAYS exceeds the cost of:
+     * 1. Paying fees (both legs of the trade)
+     * 2. The expected adverse price movement while holding inventory
+     * 3. A minimum floor for ultra-quiet markets
+     */
+    public getQuotes(
+        midPrice: number, 
+        feeRate: number = 0.001, 
+        volatilityPct: number = 0, 
+        isZeroFee: boolean = false, 
+        bestBid: number = 0, 
+        bestAsk: number = 0
+    ): { 
+        bid: number, ask: number, bidEnabled: boolean, askEnabled: boolean, 
+        q: number, reservationPrice: number, effectiveSpread: number, minSpreadFloor: number, 
+        bidDistancePct: number, askDistancePct: number, bidDistanceAbs: number, askDistanceAbs: number 
+    } {
         const baseWealth = this.baseBalance * midPrice;
         const totalWealth = baseWealth + this.quoteBalance;
 
@@ -32,35 +67,37 @@ export class InventoryManager {
             }
         }
 
-        // 1. Fee-Aware Dynamic Floor
-        const minSpreadFloor = feeRate > 0 ? 2 * feeRate * 1.5 : 0;
+        // === ADAPTIVE SPREAD CALCULATION ===
+        // 1. Fee floor: covers round-trip fees with 50% safety margin
+        const feeFloor = feeRate > 0 ? 2 * feeRate * 1.5 : 0;
 
-        // 2. Volatility-Adjusted Spread
-        const baselineVol = 0.001; 
-        let volatilityMultiplier = 1;
-        if (volatilityPct > baselineVol) {
-            volatilityMultiplier = 1 + ((volatilityPct - baselineVol) / baselineVol);
-        }
-        
-        const zeroFeeSpread = 0.00015; // 0.015% — tight spread for zero-fee pairs
-        const spreadBase = isZeroFee ? zeroFeeSpread : this.BASE_SPREAD_PCT;
-        const effectiveSpread = Math.max(spreadBase, minSpreadFloor) * volatilityMultiplier;
+        // 2. Volatility floor: covers expected price movement during holding period
+        //    volatilityPct = stddev(prices) / mean(prices) over 60s window
+        //    SAFETY_MULTIPLIER scales it to cover worst-case movements (3-sigma by default)
+        const volatilityFloor = this.SAFETY_MULTIPLIER * volatilityPct;
+
+        // 3. Absolute minimum: prevents zero-spread in ultra-quiet markets
+        const absoluteFloor = this.ABSOLUTE_MIN_SPREAD;
+
+        // Final spread = the maximum of all three floors
+        const minSpreadFloor = Math.max(feeFloor, volatilityFloor, absoluteFloor);
+        const effectiveSpread = minSpreadFloor;
         const baseHalfSpread = effectiveSpread / 2;
 
-        // 3. Asymmetric Spread Adjustment
+        // === ASYMMETRIC SPREAD ADJUSTMENT (inventory skew) ===
         let bidDistance = baseHalfSpread;
         let askDistance = baseHalfSpread;
         
-        // We use GAMMA * 10 as a scaler so that GAMMA 0.1 -> 1x multiplier per max q(0.5)
+        // GAMMA * 10 as scaler: GAMMA 0.1 -> 1x multiplier per max q(0.5)
         const skewScaler = this.GAMMA * 10;
 
         if (q > 0) {
-            // Long base asset: Widen bid (harder to buy), tighten ask (easier to sell)
+            // Long base asset: Widen bid (harder to buy more), tighten ask (easier to sell)
             bidDistance = baseHalfSpread * (1 + q * skewScaler);
-            askDistance = Math.max(minSpreadFloor / 2, baseHalfSpread * (1 - q * skewScaler));
+            askDistance = Math.max(absoluteFloor / 2, baseHalfSpread * (1 - q * skewScaler));
         } else if (q < 0) {
             // Short base asset: Tighten bid (easier to buy), widen ask (harder to sell)
-            bidDistance = Math.max(minSpreadFloor / 2, baseHalfSpread * (1 - Math.abs(q) * skewScaler));
+            bidDistance = Math.max(absoluteFloor / 2, baseHalfSpread * (1 - Math.abs(q) * skewScaler));
             askDistance = baseHalfSpread * (1 + Math.abs(q) * skewScaler);
         }
 
@@ -70,7 +107,7 @@ export class InventoryManager {
         const bid = midPrice * (1 - bidDistance);
         const ask = midPrice * (1 + askDistance);
 
-        // Keeping reservationPrice logic compatible (just pseudo-mid for telemetry if needed)
+        // Reservation price for telemetry
         const reservationPrice = midPrice * (1 - q * this.GAMMA * 0.1); 
 
         // Top-of-book distance metrics

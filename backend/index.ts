@@ -324,7 +324,9 @@ setInterval(() => {
         askDistanceAbs: quotes.askDistanceAbs,
         bestBid,
         bestAsk,
-        isZeroFee: isZeroFeePromo
+        isZeroFee: isZeroFeePromo,
+        safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
+        absoluteMinSpread: inventoryManager.ABSOLUTE_MIN_SPREAD
     }));
 }, 1000);
 

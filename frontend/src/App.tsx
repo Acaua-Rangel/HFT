@@ -551,6 +551,25 @@ function App() {
             ) : '--'}
           </div>
         </div>
+        <div className="glass-panel metric-card">
+          <div className="panel-title">🧮 Adaptive Spread (Auto)</div>
+          <div className="metric-value" style={{ fontSize: '12px', lineHeight: '1.7' }}>
+            {telemetry?.effectiveSpread !== undefined ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                <span style={{ color: '#94a3b8' }}>
+                  Vol: {telemetry.volatilityPct !== undefined ? `${(telemetry.volatilityPct * 100).toFixed(4)}%` : '--'}
+                  {telemetry.safetyMultiplier !== undefined ? ` × ${telemetry.safetyMultiplier}σ` : ''}
+                </span>
+                <span style={{ color: '#3b82f6', fontWeight: 'bold', fontSize: '14px' }}>
+                  Spread: {(telemetry.effectiveSpread * 100).toFixed(4)}%
+                </span>
+                <span style={{ color: '#94a3b8' }}>
+                  ≈ ${telemetry.midPrice ? (telemetry.midPrice * telemetry.effectiveSpread).toFixed(2) : '--'} total
+                </span>
+              </div>
+            ) : '--'}
+          </div>
+        </div>
               <div className="glass-panel metric-card">
           <div className="panel-title">Total Wealth (Est. {telemetry?.quoteSymbol || 'Quote'})</div>
           <div className="metric-value" style={{ color: '#3b82f6' }}>
