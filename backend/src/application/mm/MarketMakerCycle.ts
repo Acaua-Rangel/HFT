@@ -34,15 +34,28 @@ export class MarketMakerCycle {
         midPriceAmount.apply(v => midPrice = v);
         if (midPrice <= 0) return;
 
-        const { bid, ask, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee);
+        let bestBid = 0;
+        let bestAsk = 0;
+        tick.applyTopBid(l => { if (l) l.price.apply(v => bestBid = v); });
+        tick.applyTopAsk(l => { if (l) l.price.apply(v => bestAsk = v); });
+
+        let { bid, ask, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk);
+
+        // Enforce Post-Only limits: never cross the spread
+        if (bestBid > 0) bid = Math.min(bid, bestBid);
+        if (bestAsk > 0) ask = Math.max(ask, bestAsk);
+
+        const totalWealth = (this.inventoryManager.baseBalance * midPrice) + this.inventoryManager.quoteBalance;
+        const MAX_ORDER_VALUE = totalWealth * 0.60;
 
         let baseLotQuote = this.lotConfig.mode === "PERCENTAGE" 
-            ? this.inventoryManager.quoteBalance * this.lotConfig.value 
+            ? totalWealth * this.lotConfig.value 
             : this.lotConfig.value;
 
         // Limite mínimo de ordem (ex: R$ 10 ou 10 FDUSD)
         const MIN_ORDER_VALUE = 10;
         baseLotQuote = Math.max(baseLotQuote, MIN_ORDER_VALUE);
+        baseLotQuote = Math.min(baseLotQuote, MAX_ORDER_VALUE);
 
         // Ajuste assimétrico de lote por inventário
         let buyLotQuote = baseLotQuote * Math.max(0.2, 1 - q * 1.5);

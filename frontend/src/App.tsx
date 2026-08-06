@@ -241,6 +241,12 @@ function App() {
     orderbook.bids[orderbook.bids.length - 1]?.total || 1
   );
 
+  const currentTotalWealth = (balance ?? 0) + ((telemetry?.baseBalance ?? 0) * (telemetry?.midPrice ?? 0));
+  const minLotAmount = 10;
+  const minLotPct = currentTotalWealth > 0 ? Math.ceil((minLotAmount / currentTotalWealth) * 1000) / 1000 : 0.01;
+  const maxLotPct = 0.60;
+  const maxLotAmount = currentTotalWealth * maxLotPct;
+
   const handleToggleMode = (mode: "SIMULATION" | "LIVE") => {
     if (mode === "LIVE" && tradingMode === "SIMULATION") {
       setShowLiveModal(true);
@@ -409,7 +415,9 @@ function App() {
                   <button 
                     onClick={() => {
                       const newMode = lotMode === 'PERCENTAGE' ? 'FIXED' : 'PERCENTAGE';
-                      const newValue = newMode === 'PERCENTAGE' ? 0.05 : 50;
+                      let newValue = newMode === 'PERCENTAGE' ? Math.max(minLotPct, Math.min(maxLotPct, lotValue)) : Math.max(minLotAmount, Math.min(maxLotAmount, lotValue));
+                      if (newMode === 'PERCENTAGE' && newValue < minLotPct) newValue = minLotPct;
+                      else if (newMode === 'FIXED' && newValue < minLotAmount) newValue = minLotAmount;
                       setLotMode(newMode);
                       setLotValue(newValue);
                       wsRef.current?.send(JSON.stringify({ type: "UPDATE_LOT_CONFIG", mode: newMode, value: newValue }));
@@ -419,15 +427,21 @@ function App() {
                     Mode: {lotMode === 'PERCENTAGE' ? '% of Balance' : 'Fixed Amount'}
                   </button>
                   <strong>{lotMode === 'PERCENTAGE' ? `${(lotValue * 100).toFixed(1)}%` : `$${lotValue.toFixed(2)}`}</strong>
+                  <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '4px', textAlign: 'right' }}>
+                    Min: {lotMode === 'PERCENTAGE' ? `${(minLotPct * 100).toFixed(1)}% ($${minLotAmount})` : `$${minLotAmount.toFixed(2)}`} | Max: {lotMode === 'PERCENTAGE' ? `${(maxLotPct * 100).toFixed(1)}%` : `$${maxLotAmount.toFixed(2)}`}
+                  </div>
                 </div>
               </label>
               <input type="range" 
-                min={lotMode === 'PERCENTAGE' ? 0.01 : 10} 
-                max={lotMode === 'PERCENTAGE' ? 0.20 : 1000} 
-                step={lotMode === 'PERCENTAGE' ? 0.005 : 10} 
+                min={lotMode === 'PERCENTAGE' ? minLotPct : minLotAmount} 
+                max={lotMode === 'PERCENTAGE' ? maxLotPct : maxLotAmount} 
+                step={lotMode === 'PERCENTAGE' ? 0.005 : 5} 
                 value={lotValue} 
                 onChange={(e) => {
-                  const val = parseFloat(e.target.value);
+                  let val = parseFloat(e.target.value);
+                  const minBound = lotMode === 'PERCENTAGE' ? minLotPct : minLotAmount;
+                  const maxBound = lotMode === 'PERCENTAGE' ? maxLotPct : maxLotAmount;
+                  val = Math.max(minBound, Math.min(maxBound, val));
                   setLotValue(val);
                   wsRef.current?.send(JSON.stringify({ type: "UPDATE_LOT_CONFIG", value: val }));
                 }} style={{ width: '100%', accentColor: '#3b82f6' }} />

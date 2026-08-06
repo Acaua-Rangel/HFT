@@ -56,7 +56,7 @@ describe("LiquidityMonitor", () => {
         
         stateManager.updateState(new Tick(pair, asks, bids));
         
-        // Sum is > 20, so it should NOT pause, proving the multi-level logic works
+        // Sum is > 10, so it should NOT pause, proving the multi-level logic works
         expect(monitor.shouldPause(pair)).toBeFalse();
     });
 });

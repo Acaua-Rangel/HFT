@@ -142,10 +142,22 @@ export class BinanceOrderExecutor implements OrderExecutor {
 
         if (placeRes.status !== 200) {
           if (placeRes.error?.code === -2010) {
-             if (attempt === maxRetries - 1) {
-                 this.logError("ORDER_REJECTED_INSUFFICIENT_FUNDS", JSON.stringify(placeRes.error));
+             const errorMsg = placeRes.error?.msg?.toLowerCase() || "";
+             if (errorMsg.includes("match and take")) {
+                 this.logError("ORDER_REJECTED_POST_ONLY_CROSSING", JSON.stringify(placeRes.error));
+                 break; // Do not retry crossing price
+             } else if (errorMsg.includes("insufficient")) {
+                 if (attempt === maxRetries - 1) {
+                     this.logError("ORDER_REJECTED_INSUFFICIENT_FUNDS", JSON.stringify(placeRes.error));
+                 } else {
+                     continue; 
+                 }
              } else {
-                 continue; 
+                 if (attempt === maxRetries - 1) {
+                     this.logError("ORDER_REJECTED_-2010", JSON.stringify(placeRes.error));
+                 } else {
+                     continue; 
+                 }
              }
           } else {
              this.logError("ORDER_REJECTED", JSON.stringify(placeRes.error));

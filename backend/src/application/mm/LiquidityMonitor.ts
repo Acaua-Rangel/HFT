@@ -3,8 +3,8 @@ import { Pair } from "../../domain/valueObjects/Pair";
 
 export class LiquidityMonitor {
     // Check if the top levels have at least a minimal healthy volume
-    // E.g., at least $20 available in the top 3 levels of the book
-    private readonly MIN_NOTIONAL = 20;
+    // E.g., at least $10 available in the top 3 levels of the book (matches MIN_ORDER_VALUE)
+    private readonly MIN_NOTIONAL = 10;
 
     constructor(private stateManager: LocalStateManager) {}
 
@@ -34,7 +34,7 @@ export class LiquidityMonitor {
         });
 
         if (bidVolume < this.MIN_NOTIONAL || askVolume < this.MIN_NOTIONAL) {
-            console.log(`⚠️ Liquidity Monitor Veto: Top levels too thin. Bids: $${bidVolume.toFixed(0)}, Asks: $${askVolume.toFixed(0)}`);
+            // Silently veto. No console log spam needed as this can happen every tick on quiet markets.
             return true;
         }
 
