@@ -242,7 +242,7 @@ function App() {
   );
 
   const currentTotalWealth = (balance ?? 0) + ((telemetry?.baseBalance ?? 0) * (telemetry?.midPrice ?? 0));
-  const minLotAmount = 10;
+  const minLotAmount = telemetry?.minNotional ?? 10;
   const minLotPct = currentTotalWealth > 0 ? Math.ceil((minLotAmount / currentTotalWealth) * 1000) / 1000 : 0.01;
   const maxLotPct = 0.60;
   const maxLotAmount = currentTotalWealth * maxLotPct;

@@ -1,8 +1,10 @@
 export class BinancePrecisionFetcher {
   private quantityPrecisionCache = new Map<string, number>();
   private priceTickSizeCache = new Map<string, number>();
+  private minNotionalCache = new Map<string, number>();
   private defaultPrecision = 0;
   private defaultTickSize = 0.01;
+  private defaultMinNotional = 10;
 
   public async preloadPrecisions(): Promise<void> {
     try {
@@ -26,8 +28,13 @@ export class BinancePrecisionFetcher {
           if (priceFilter && priceFilter.tickSize) {
             this.priceTickSizeCache.set(item.symbol.toUpperCase(), parseFloat(priceFilter.tickSize));
           }
+
+          const notionalFilter = item.filters.find((f: any) => f.filterType === "NOTIONAL" || f.filterType === "MIN_NOTIONAL");
+          if (notionalFilter && notionalFilter.minNotional) {
+            this.minNotionalCache.set(item.symbol.toUpperCase(), parseFloat(notionalFilter.minNotional));
+          }
         }
-        console.log(`✅ Preloaded precision and tickSize filters for ${this.quantityPrecisionCache.size} symbols from Binance API.`);
+        console.log(`✅ Preloaded precision, tickSize and minNotional filters for ${this.quantityPrecisionCache.size} symbols from Binance API.`);
       } else {
         console.warn(`⚠️ Failed to preload exchangeInfo: HTTP ${response.status}`);
       }
@@ -42,5 +49,9 @@ export class BinancePrecisionFetcher {
 
   public getPriceTickSize(symbol: string): number {
     return this.priceTickSizeCache.get(symbol.toUpperCase()) ?? this.defaultTickSize;
+  }
+
+  public getMinNotional(symbol: string): number {
+    return this.minNotionalCache.get(symbol.toUpperCase()) ?? this.defaultMinNotional;
   }
 }

@@ -39,6 +39,7 @@ class MockWsClient extends BinanceWsClient {
   public simulateFailure = false;
   public simulateTimeout = false;
   public lastParams: any = null;
+  public lastPlaceParams: any = null;
   
   constructor() {
     super("key", "secret");
@@ -52,6 +53,9 @@ class MockWsClient extends BinanceWsClient {
   
   public override async sendRequest(method: string, params: any, timeoutMs: number = 3000): Promise<WsResponse> {
     this.lastParams = params;
+    if (method === "order.place") {
+      this.lastPlaceParams = params;
+    }
     if (!this.ready) {
       throw new Error("Socket disconnected");
     }
@@ -202,9 +206,9 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
 
     const btcPair = new Pair(new Currency("BTC"), new Currency("USDT"));
-    await executor.executeIocSell(btcPair, new Amount(1.12345678));
+    await executor.executeMakerSell(btcPair, new Amount(1.12345678), undefined, 0);
 
-    expect(mockClient.lastParams.quantity).toBe("1.12345");
+    expect(mockClient.lastPlaceParams.quantity).toBe("1.12345");
   });
 
   test("Precision - Should use 4 decimals for ETH quantity on Sell", async () => {
@@ -214,9 +218,9 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
 
     const ethPair = new Pair(new Currency("ETH"), new Currency("USDT"));
-    await executor.executeIocSell(ethPair, new Amount(1.12345678));
+    await executor.executeMakerSell(ethPair, new Amount(1.12345678), undefined, 0);
 
-    expect(mockClient.lastParams.quantity).toBe("1.1234");
+    expect(mockClient.lastPlaceParams.quantity).toBe("1.1234");
   });
 
   test("Precision - Should use 0 decimals for MEME quantity on Sell", async () => {
@@ -226,9 +230,9 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
 
     const pepePair = new Pair(new Currency("PEPE"), new Currency("USDT"));
-    await executor.executeIocSell(pepePair, new Amount(154032.403));
+    await executor.executeMakerSell(pepePair, new Amount(15.403), undefined, 0);
 
-    expect(mockClient.lastParams.quantity).toBe("154032");
+    expect(mockClient.lastPlaceParams.quantity).toBe("5");
   });
 
   test("Execution Error - Should log ORDER_TRUNCATED_TO_ZERO if quantity is too small", async () => {

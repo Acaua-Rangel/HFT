@@ -280,6 +280,10 @@ setInterval(() => {
     let baseSym = ""; let quoteSym = "";
     mmPair.applyCurrencies((b, q) => { b.applySymbol(s => baseSym = s); q.applySymbol(s => quoteSym = s); });
 
+    let pairSymbol = "";
+    mmPair.applyBinanceSymbol(s => pairSymbol = s);
+    const minNotional = precisionFetcher.getMinNotional(pairSymbol);
+
     const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
     const isZeroFeePromo = quoteSym === "FDUSD" && zeroFeePromoBases.includes(baseSym);
     
@@ -318,6 +322,7 @@ setInterval(() => {
         lotValue: mmCycle.lotConfig.value,
         effectiveBuyLot: mmCycle.currentEffectiveBuyLotQuote,
         effectiveSellLot: mmCycle.currentEffectiveSellLotQuote,
+        minNotional: minNotional,
         bidDistancePct: quotes.bidDistancePct,
         askDistancePct: quotes.askDistancePct,
         bidDistanceAbs: quotes.bidDistanceAbs,

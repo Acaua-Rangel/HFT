@@ -45,9 +45,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
     return this.sendWsOrder("SELL", pair, amount, price, ttlMs);
   }
 
-  public async executeIocSell(pair: Pair, amount: Amount, slippageTolerance: number = 0.01): Promise<OrderFill> {
-    return this.sendWsIocOrder("SELL", pair, amount, slippageTolerance);
-  }
+
 
   public canExecuteBatch(count: number): boolean {
     return this.rateLimiter.hasCapacityFor(count);
@@ -225,101 +223,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
     return new OrderFill(executedQtyAmt, cummulativeQuoteQtyAmt, averagePriceAmt, true);
   }
 
-  private async sendWsIocOrder(side: string, pair: Pair, amount: Amount, slippageTolerance: number): Promise<OrderFill> {
-    await this.ensureConnected();
 
-    if (!this.wsClient.isReady()) {
-      return OrderFill.failed();
-    }
-
-    if (!this.rateLimiter.hasCapacityFor(1)) {
-      this.logError("RATE_LIMIT", "Not enough quota to place IOC order");
-      return OrderFill.failed();
-    }
-
-    let symbol = "";
-    pair.applyBinanceSymbol((sym) => { symbol = sym; });
-
-    let amountVal = 0;
-    amount.apply((val) => { amountVal = val; });
-
-    const quantityDecimals = this.precisionFetcher.getQuantityDecimals(symbol);
-    const factor = Math.pow(10, quantityDecimals);
-    const truncatedQty = Math.floor(amountVal * factor) / factor;
-
-    if (truncatedQty <= 0) return OrderFill.failed();
-
-    const book = this.stateManager.retrieveOrderBook(pair);
-    const tick = book.getLatest();
-    if (!tick) return OrderFill.failed();
-    
-    const midPriceAmount = tick.getMidPrice();
-    if (!midPriceAmount) return OrderFill.failed();
-    
-    let midPriceRaw = 0;
-    midPriceAmount.apply(v => midPriceRaw = v);
-
-    const tickSize = this.precisionFetcher.getPriceTickSize(symbol);
-    
-    let limitPriceRaw = midPriceRaw;
-    if (side === "SELL") {
-        limitPriceRaw = midPriceRaw * (1 - slippageTolerance);
-    } else {
-        limitPriceRaw = midPriceRaw * (1 + slippageTolerance);
-    }
-
-    let roundedPrice = limitPriceRaw;
-    if (side === "BUY") {
-      roundedPrice = Math.floor(limitPriceRaw / tickSize) * tickSize;
-    } else {
-      roundedPrice = Math.ceil(limitPriceRaw / tickSize) * tickSize;
-    }
-
-    const priceDecimals = tickSize.toString().includes(".") ? (tickSize.toString().split(".")[1]?.length || 0) : 0;
-    const priceStr = roundedPrice.toFixed(priceDecimals);
-
-    const params: any = {
-      symbol,
-      side,
-      type: "LIMIT",
-      timeInForce: "IOC",
-      price: priceStr,
-      quantity: truncatedQty.toFixed(quantityDecimals),
-      newOrderRespType: "FULL"
-    };
-
-    this.rateLimiter.recordUsage(1);
-    try {
-      const res: WsResponse = await this.wsClient.sendRequest("order.place", params, 2000);
-
-      if (res.status !== 200) {
-        this.logError("ORDER_REJECTED", JSON.stringify(res.error));
-        return OrderFill.failed();
-      }
-
-      const data = res.result;
-      let executedQtyVal = parseFloat(data.executedQty || "0");
-      const cummulativeQuoteQty = new Amount(parseFloat(data.cummulativeQuoteQty || "0"));
-      
-      const executedQty = new Amount(executedQtyVal);
-
-      let averagePriceVal = 0;
-      cummulativeQuoteQty.apply((c) => {
-        executedQty.apply((e) => {
-          if (e > 0) averagePriceVal = c / e;
-        });
-      });
-      const averagePrice = new Amount(averagePriceVal);
-
-      const fill = new OrderFill(executedQty, cummulativeQuoteQty, averagePrice, true);
-      this.logTrade(symbol, executedQty, averagePrice, "LIMIT_IOC");
-
-      return fill;
-    } catch (err) {
-      this.logError("ORDER_FAILED", err instanceof Error ? err.message : String(err));
-      return OrderFill.failed();
-    }
-  }
 
   public forceInjectWsClientForTests(mockClient: BinanceWsClient, mockLimiter: ExecutionRateLimiter): void {
     this.wsClient = mockClient;

@@ -57,9 +57,7 @@ export class SimulationOrderExecutor implements OrderExecutor {
         return this.simulateOrder("SELL", pair, amount, price, ttlMs);
     }
 
-    public async executeIocSell(pair: Pair, amount: Amount, slippageTolerance: number = 0.01): Promise<OrderFill> {
-        return this.simulateIocOrder("SELL", pair, amount, slippageTolerance);
-    }
+
 
     // ================================================================
     // Core simulation: mirrors sendWsOrder from BinanceOrderExecutor
@@ -228,105 +226,7 @@ export class SimulationOrderExecutor implements OrderExecutor {
         return new OrderFill(executedQtyAmt, cummulativeQuoteQtyAmt, averagePriceAmt, true);
     }
 
-    // ================================================================
-    // IOC simulation: mirrors sendWsIocOrder from BinanceOrderExecutor
-    // ================================================================
-    private async simulateIocOrder(side: string, pair: Pair, amount: Amount, slippageTolerance: number): Promise<OrderFill> {
-        let symbol = "";
-        pair.applyBinanceSymbol((sym) => { symbol = sym; });
 
-        let amountVal = 0;
-        amount.apply((val) => { amountVal = val; });
-
-        const quantityDecimals = this.precisionFetcher.getQuantityDecimals(symbol);
-        const factor = Math.pow(10, quantityDecimals);
-        const truncatedQty = Math.floor(amountVal * factor) / factor;
-        if (truncatedQty <= 0) return OrderFill.failed();
-
-        const book = this.stateManager.retrieveOrderBook(pair);
-        const tick = book.getLatest();
-        if (!tick) return OrderFill.failed();
-
-        const midPriceAmount = tick.getMidPrice();
-        if (!midPriceAmount) return OrderFill.failed();
-
-        let midPriceRaw = 0;
-        midPriceAmount.apply(v => midPriceRaw = v);
-
-        const tickSize = this.precisionFetcher.getPriceTickSize(symbol);
-
-        let limitPriceRaw = midPriceRaw;
-        if (side === "SELL") {
-            limitPriceRaw = midPriceRaw * (1 - slippageTolerance);
-        } else {
-            limitPriceRaw = midPriceRaw * (1 + slippageTolerance);
-        }
-
-        let roundedPrice = limitPriceRaw;
-        if (side === "BUY") {
-            roundedPrice = Math.floor(limitPriceRaw / tickSize) * tickSize;
-        } else {
-            roundedPrice = Math.ceil(limitPriceRaw / tickSize) * tickSize;
-        }
-
-        // Check balance
-        if (side === "SELL" && truncatedQty > this._baseBalance) {
-            return OrderFill.failed();
-        }
-        if (side === "BUY") {
-            const cost = truncatedQty * roundedPrice;
-            if (cost > this._quoteBalance) return OrderFill.failed();
-        }
-
-        // IOC (Taker): mundo real HFT tem concorrência alta.
-        // Taxas reais: ~25% Fail (liquidez roubada), ~25% Partial (book raso), ~50% Full (lote pequeno)
-        const fillRoll = Math.random();
-        let fillRatio: number;
-        if (fillRoll < 0.25) {
-            return OrderFill.failed();
-        } else if (fillRoll < 0.50) {
-            fillRatio = 0.3 + Math.random() * 0.6;
-        } else {
-            fillRatio = 1.0;
-        }
-
-        const filledQty = Math.floor(truncatedQty * fillRatio * factor) / factor;
-        if (filledQty <= 0) return OrderFill.failed();
-
-        // Slippage no mundo real tende a se concentrar próximo a 0, com picos raros.
-        // Math.pow(Math.random(), 2) distorce a probabilidade favorecendo números menores.
-        const actualSlippage = Math.pow(Math.random(), 2) * slippageTolerance;
-        const executionPrice = side === "SELL"
-            ? roundedPrice * (1 - actualSlippage)
-            : roundedPrice * (1 + actualSlippage);
-
-        const filledQuote = filledQty * executionPrice;
-
-        // Apply trading fee (same logic as maker orders)
-        const feeRate = this.bnbDiscountEnabled
-            ? this.BASE_FEE_RATE * (1 - this.BNB_DISCOUNT)
-            : this.BASE_FEE_RATE;
-
-        // Update virtual balances with fee deduction
-        if (side === "SELL") {
-            this._baseBalance -= filledQty;
-            const feeQuote = filledQuote * feeRate;
-            this._quoteBalance += (filledQuote - feeQuote);
-            this.totalFeesCollected += feeQuote;
-        } else {
-            const feeBase = filledQty * feeRate;
-            this._quoteBalance -= filledQuote;
-            this._baseBalance += (filledQty - feeBase);
-            this.totalFeesCollected += feeBase * executionPrice;
-        }
-
-        const executedQty = new Amount(filledQty);
-        const cummulativeQuoteQty = new Amount(filledQuote);
-        const averagePrice = new Amount(filledQty > 0 ? filledQuote / filledQty : 0);
-
-        this.logTrade(symbol, executedQty, averagePrice, "SIM_LIMIT_IOC");
-        return new OrderFill(executedQty, cummulativeQuoteQty, averagePrice, true);
-    }
 
     // ================================================================
     // Logging (identical signatures to BinanceOrderExecutor)
