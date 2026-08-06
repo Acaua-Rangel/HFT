@@ -451,106 +451,104 @@ function App() {
         </div>
       </div>
 
-      <div className="metrics-row">
-        <div className="glass-panel metric-card">
-          <div className="panel-title">Inventory Skew (q)</div>
-          <div className={`metric-value ${telemetry?.q !== undefined && Math.abs(telemetry.q) > 0.3 ? 'negative' : 'positive'}`}>
-            {telemetry?.q !== undefined ? `${(telemetry.q * 100).toFixed(1)}%` : '--%'}
-          </div>
-        </div>
-        <div className="glass-panel metric-card">
-          <div className="panel-title">
-            {tradingMode === 'SIMULATION' ? `Base Inventory (Sim ${telemetry?.baseSymbol || ''})` : `Base Inventory (Live ${telemetry?.baseSymbol || ''})`}
-          </div>
-          <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
-            {telemetry?.baseBalance !== undefined ? `${telemetry.baseBalance.toFixed(4)} ${telemetry.baseSymbol || ''}` : '--'}
-          </div>
-        </div>
-        <div className="glass-panel metric-card">
-          <div className="panel-title">
-            {tradingMode === 'SIMULATION' ? `Quote Balance (Sim ${telemetry?.quoteSymbol || ''})` : `Quote Balance (Live ${telemetry?.quoteSymbol || ''})`}
-            {tradingMode === 'SIMULATION' && (
-              <span className="edit-sim-balance" onClick={() => {
-                setIsEditingSimBalance(!isEditingSimBalance);
-                if (!isEditingSimBalance) setSimBalanceInput(balance?.toString() || simBalance.toString());
-              }}>
-                ✏️
-              </span>
-            )}
-          </div>
-          <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
-            {tradingMode === 'SIMULATION' && isEditingSimBalance ? (
-              <div className="sim-balance-edit-container">
-                <input 
-                  type="number" 
-                  className="sim-balance-edit"
-                  value={simBalanceInput} 
-                  onChange={e => setSimBalanceInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSimBalanceSubmit()}
-                  autoFocus
-                />
-                <span className="sim-balance-confirm" onClick={handleSimBalanceSubmit}>✔️</span>
-              </div>
-            ) : (
-              balance !== null ? `${balance.toFixed(2)}` : '--'
-            )}
-          </div>
-        </div>
-
-
-        <div className="glass-panel metric-card">
-          <div className="panel-title">Network Latency (NY4)</div>
-          <div className="metric-value" style={{ color: latency !== null && latency < 10 ? 'var(--color-up)' : '#eab308' }}>
-            {latency !== null ? `${latency}ms` : '--ms'}
-          </div>
-        </div>
-        <div className="glass-panel metric-card">
-          <div className="panel-title">📍 Top of Book Distance</div>
-          <div className="metric-value" style={{ fontSize: '13px', lineHeight: '1.6' }}>
-            {telemetry?.bidDistancePct !== undefined ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                <span style={{ color: telemetry.bidDistancePct < 0.01 ? 'var(--color-up)' : telemetry.bidDistancePct < 0.05 ? '#eab308' : '#ef4444' }}>
-                  Bid: {telemetry.bidDistancePct < 0.001 ? '🎯 TOP' : `-${telemetry.bidDistancePct.toFixed(4)}%`}
-                  {telemetry.bidDistanceAbs !== undefined && telemetry.bidDistanceAbs > 0 ? ` ($${telemetry.bidDistanceAbs.toFixed(2)})` : ''}
-                </span>
-                <span style={{ color: telemetry.askDistancePct < 0.01 ? 'var(--color-up)' : telemetry.askDistancePct < 0.05 ? '#eab308' : '#ef4444' }}>
-                  Ask: {telemetry.askDistancePct < 0.001 ? '🎯 TOP' : `+${telemetry.askDistancePct.toFixed(4)}%`}
-                  {telemetry.askDistanceAbs !== undefined && telemetry.askDistanceAbs > 0 ? ` ($${telemetry.askDistanceAbs.toFixed(2)})` : ''}
-                </span>
-              </div>
-            ) : '--'}
-          </div>
-        </div>
-        <div className="glass-panel metric-card">
-          <div className="panel-title">🧮 Adaptive Spread (Auto)</div>
-          <div className="metric-value" style={{ fontSize: '12px', lineHeight: '1.7' }}>
-            {telemetry?.effectiveSpread !== undefined ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                <span style={{ color: '#94a3b8' }}>
-                  Vol: {telemetry.volatilityPct !== undefined ? `${(telemetry.volatilityPct * 100).toFixed(4)}%` : '--'}
-                  {telemetry.safetyMultiplier !== undefined ? ` × ${telemetry.safetyMultiplier}σ` : ''}
-                </span>
-                <span style={{ color: '#3b82f6', fontWeight: 'bold', fontSize: '14px' }}>
-                  Spread: {(telemetry.effectiveSpread * 100).toFixed(4)}%
-                </span>
-                <span style={{ color: '#94a3b8' }}>
-                  ≈ ${telemetry.midPrice ? (telemetry.midPrice * telemetry.effectiveSpread).toFixed(2) : '--'} total
-                </span>
-              </div>
-            ) : '--'}
-          </div>
-        </div>
-              <div className="glass-panel metric-card">
-          <div className="panel-title">Total Wealth (Est. {telemetry?.quoteSymbol || 'Quote'})</div>
-          <div className="metric-value" style={{ color: '#3b82f6' }}>
-             {(balance !== null && telemetry?.midPrice !== undefined && telemetry?.baseBalance !== undefined) 
-               ? `${telemetry.quoteSymbol === 'USDT' || telemetry.quoteSymbol === 'FDUSD' ? '$' : 'R$'} ${((telemetry.baseBalance * telemetry.midPrice) + balance).toFixed(2)}` 
-               : '--'}
-          </div>
-        </div>
-      </div>
-
       <div className="dashboard-grid">
+        <div className="metrics-row">
+          <div className="glass-panel metric-card">
+            <div className="panel-title">Inventory Skew (q)</div>
+            <div className={`metric-value ${telemetry?.q !== undefined && Math.abs(telemetry.q) > 0.3 ? 'negative' : 'positive'}`}>
+              {telemetry?.q !== undefined ? `${(telemetry.q * 100).toFixed(1)}%` : '--%'}
+            </div>
+          </div>
+          <div className="glass-panel metric-card">
+            <div className="panel-title">
+              {tradingMode === 'SIMULATION' ? `Base Inventory (Sim ${telemetry?.baseSymbol || ''})` : `Base Inventory (Live ${telemetry?.baseSymbol || ''})`}
+            </div>
+            <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
+              {telemetry?.baseBalance !== undefined ? `${telemetry.baseBalance.toFixed(4)} ${telemetry.baseSymbol || ''}` : '--'}
+            </div>
+          </div>
+          <div className="glass-panel metric-card">
+            <div className="panel-title">
+              {tradingMode === 'SIMULATION' ? `Quote Balance (Sim ${telemetry?.quoteSymbol || ''})` : `Quote Balance (Live ${telemetry?.quoteSymbol || ''})`}
+              {tradingMode === 'SIMULATION' && (
+                <span className="edit-sim-balance" onClick={() => {
+                  setIsEditingSimBalance(!isEditingSimBalance);
+                  if (!isEditingSimBalance) setSimBalanceInput(balance?.toString() || simBalance.toString());
+                }}>
+                  ✏️
+                </span>
+              )}
+            </div>
+            <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
+              {tradingMode === 'SIMULATION' && isEditingSimBalance ? (
+                <div className="sim-balance-edit-container">
+                  <input 
+                    type="number" 
+                    className="sim-balance-edit"
+                    value={simBalanceInput} 
+                    onChange={e => setSimBalanceInput(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSimBalanceSubmit()}
+                    autoFocus
+                  />
+                  <span className="sim-balance-confirm" onClick={handleSimBalanceSubmit}>✔️</span>
+                </div>
+              ) : (
+                balance !== null ? `${balance.toFixed(2)}` : '--'
+              )}
+            </div>
+          </div>
+
+          <div className="glass-panel metric-card">
+            <div className="panel-title">Network Latency (NY4)</div>
+            <div className="metric-value" style={{ color: latency !== null && latency < 10 ? 'var(--color-up)' : '#eab308' }}>
+              {latency !== null ? `${latency}ms` : '--ms'}
+            </div>
+          </div>
+          <div className="glass-panel metric-card">
+            <div className="panel-title">📍 Top of Book Distance</div>
+            <div className="metric-value" style={{ fontSize: '13px', lineHeight: '1.6' }}>
+              {telemetry?.bidDistancePct !== undefined ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <span style={{ color: telemetry.bidDistancePct < 0.01 ? 'var(--color-up)' : telemetry.bidDistancePct < 0.05 ? '#eab308' : '#ef4444' }}>
+                    Bid: {telemetry.bidDistancePct < 0.001 ? '🎯 TOP' : `-${telemetry.bidDistancePct.toFixed(4)}%`}
+                    {telemetry.bidDistanceAbs !== undefined && telemetry.bidDistanceAbs > 0 ? ` ($${telemetry.bidDistanceAbs.toFixed(2)})` : ''}
+                  </span>
+                  <span style={{ color: telemetry.askDistancePct < 0.01 ? 'var(--color-up)' : telemetry.askDistancePct < 0.05 ? '#eab308' : '#ef4444' }}>
+                    Ask: {telemetry.askDistancePct < 0.001 ? '🎯 TOP' : `+${telemetry.askDistancePct.toFixed(4)}%`}
+                    {telemetry.askDistanceAbs !== undefined && telemetry.askDistanceAbs > 0 ? ` ($${telemetry.askDistanceAbs.toFixed(2)})` : ''}
+                  </span>
+                </div>
+              ) : '--'}
+            </div>
+          </div>
+          <div className="glass-panel metric-card">
+            <div className="panel-title">🧮 Adaptive Spread (Auto)</div>
+            <div className="metric-value" style={{ fontSize: '12px', lineHeight: '1.7' }}>
+              {telemetry?.effectiveSpread !== undefined ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                  <span style={{ color: '#94a3b8' }}>
+                    Vol: {telemetry.volatilityPct !== undefined ? `${(telemetry.volatilityPct * 100).toFixed(4)}%` : '--'}
+                    {telemetry.safetyMultiplier !== undefined ? ` × ${telemetry.safetyMultiplier}σ` : ''}
+                  </span>
+                  <span style={{ color: '#3b82f6', fontWeight: 'bold', fontSize: '14px' }}>
+                    Spread: {(telemetry.effectiveSpread * 100).toFixed(4)}%
+                  </span>
+                  <span style={{ color: '#94a3b8' }}>
+                    ≈ ${telemetry.midPrice ? (telemetry.midPrice * telemetry.effectiveSpread).toFixed(2) : '--'} total
+                  </span>
+                </div>
+              ) : '--'}
+            </div>
+          </div>
+          <div className="glass-panel metric-card">
+            <div className="panel-title">Total Wealth (Est. {telemetry?.quoteSymbol || 'Quote'})</div>
+            <div className="metric-value" style={{ color: '#3b82f6' }}>
+               {(balance !== null && telemetry?.midPrice !== undefined && telemetry?.baseBalance !== undefined) 
+                 ? `${telemetry.quoteSymbol === 'USDT' || telemetry.quoteSymbol === 'FDUSD' ? '$' : 'R$'} ${((telemetry.baseBalance * telemetry.midPrice) + balance).toFixed(2)}` 
+                 : '--'}
+            </div>
+          </div>
+        </div>
         <div className="glass-panel orderbook-panel">
           <div className="panel-title">Live Orderbook ({debouncedPair.toUpperCase().replace('BRL', '/BRL').replace('USDT', '/USDT')})</div>
           <div className="orderbook-container">
