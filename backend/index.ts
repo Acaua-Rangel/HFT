@@ -170,7 +170,7 @@ async function startHftEngine() {
                 const feeRate = isZeroFeePromo ? 0 : 0.001;
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
 
-                await mmCycle.executeTick(mmPair, feeRate, volatilityPct);
+                await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo);
             } catch (err) {
                 console.error("MM Loop Error:", err);
             }
@@ -221,21 +221,13 @@ const server = Bun.serve({
                     maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
                     errors: latestErrors,
                     lotMode: mmCycle.lotConfig.mode,
-                    lotValue: mmCycle.lotConfig.value,
-                    bnbDiscountLocked: isBnbDiscountLocked,
-                    bnbBalance: globalBnbBalance
+                    lotValue: mmCycle.lotConfig.value
                 }));
             } else if (data.type === "SET_SIM_BALANCE") {
                 if (currentMode === "SIMULATION" && data.quoteBalance !== undefined) {
-                    simExecutor.setInitialBalances(simExecutor.baseBalance, data.quoteBalance, simExecutor.bnbBalance);
+                    simExecutor.setInitialBalances(simExecutor.baseBalance, data.quoteBalance);
                     inventoryManager.quoteBalance = data.quoteBalance;
                     console.log(`🧪 [SIM] Quote balance updated to: ${data.quoteBalance}`);
-                }
-            } else if (data.type === "SET_SIM_BNB_BALANCE") {
-                if (currentMode === "SIMULATION" && data.bnbBalance !== undefined) {
-                    simExecutor.setBnbBalance(data.bnbBalance);
-                    globalBnbBalance = data.bnbBalance;
-                    console.log(`🧪 [SIM] BNB balance updated to: ${data.bnbBalance}`);
                 }
             } else if (data.type === "GET_STATUS") {
                 ws.send(JSON.stringify({
@@ -294,7 +286,13 @@ setInterval(() => {
     const feeRate = isZeroFeePromo ? 0 : 0.001;
     const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
 
-    const quotes = inventoryManager.getQuotes(midPrice, feeRate, volatilityPct);
+    // Get top of book prices
+    let bestBid = 0;
+    let bestAsk = 0;
+    tick.applyTopBid((level) => { if (level) level.price.apply(v => bestBid = v); });
+    tick.applyTopAsk((level) => { if (level) level.price.apply(v => bestAsk = v); });
+
+    const quotes = inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFeePromo, bestBid, bestAsk);
 
     server.publish("dashboard", JSON.stringify({
         type: "TELEMETRY",
@@ -319,7 +317,14 @@ setInterval(() => {
         lotMode: mmCycle.lotConfig.mode,
         lotValue: mmCycle.lotConfig.value,
         effectiveBuyLot: mmCycle.currentEffectiveBuyLotQuote,
-        effectiveSellLot: mmCycle.currentEffectiveSellLotQuote
+        effectiveSellLot: mmCycle.currentEffectiveSellLotQuote,
+        bidDistancePct: quotes.bidDistancePct,
+        askDistancePct: quotes.askDistancePct,
+        bidDistanceAbs: quotes.bidDistanceAbs,
+        askDistanceAbs: quotes.askDistanceAbs,
+        bestBid,
+        bestAsk,
+        isZeroFee: isZeroFeePromo
     }));
 }, 1000);
 

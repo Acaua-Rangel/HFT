@@ -17,7 +17,7 @@ export class MarketMakerCycle {
         public executor: OrderExecutor
     ) {}
 
-    public async executeTick(pair: Pair, feeRate: number = 0.001, volatilityPct: number = 0): Promise<void> {
+    public async executeTick(pair: Pair, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false): Promise<void> {
         if (this.circuitBreaker.shouldPause(pair)) {
             return; // Paused by risk
         }
@@ -34,7 +34,7 @@ export class MarketMakerCycle {
         midPriceAmount.apply(v => midPrice = v);
         if (midPrice <= 0) return;
 
-        const { bid, ask, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct);
+        const { bid, ask, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee);
 
         let baseLotQuote = this.lotConfig.mode === "PERCENTAGE" 
             ? this.inventoryManager.quoteBalance * this.lotConfig.value 

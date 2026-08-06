@@ -577,6 +577,23 @@ function App() {
             {latency !== null ? `${latency}ms` : '--ms'}
           </div>
         </div>
+        <div className="glass-panel metric-card">
+          <div className="panel-title">📍 Top of Book Distance</div>
+          <div className="metric-value" style={{ fontSize: '13px', lineHeight: '1.6' }}>
+            {telemetry?.bidDistancePct !== undefined ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ color: telemetry.bidDistancePct < 0.01 ? 'var(--color-up)' : telemetry.bidDistancePct < 0.05 ? '#eab308' : '#ef4444' }}>
+                  Bid: {telemetry.bidDistancePct < 0.001 ? '🎯 TOP' : `-${telemetry.bidDistancePct.toFixed(4)}%`}
+                  {telemetry.bidDistanceAbs !== undefined && telemetry.bidDistanceAbs > 0 ? ` ($${telemetry.bidDistanceAbs.toFixed(2)})` : ''}
+                </span>
+                <span style={{ color: telemetry.askDistancePct < 0.01 ? 'var(--color-up)' : telemetry.askDistancePct < 0.05 ? '#eab308' : '#ef4444' }}>
+                  Ask: {telemetry.askDistancePct < 0.001 ? '🎯 TOP' : `+${telemetry.askDistancePct.toFixed(4)}%`}
+                  {telemetry.askDistanceAbs !== undefined && telemetry.askDistanceAbs > 0 ? ` ($${telemetry.askDistanceAbs.toFixed(2)})` : ''}
+                </span>
+              </div>
+            ) : '--'}
+          </div>
+        </div>
               <div className="glass-panel metric-card">
           <div className="panel-title">Total Wealth (Est. {telemetry?.quoteSymbol || 'Quote'})</div>
           <div className="metric-value" style={{ color: '#3b82f6' }}>

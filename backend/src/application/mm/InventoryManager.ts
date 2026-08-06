@@ -9,7 +9,7 @@ export class InventoryManager {
 
     constructor() {}
 
-    public getQuotes(midPrice: number, feeRate: number = 0.001, volatilityPct: number = 0): { bid: number, ask: number, bidEnabled: boolean, askEnabled: boolean, q: number, reservationPrice: number, effectiveSpread: number, minSpreadFloor: number } {
+    public getQuotes(midPrice: number, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false, bestBid: number = 0, bestAsk: number = 0): { bid: number, ask: number, bidEnabled: boolean, askEnabled: boolean, q: number, reservationPrice: number, effectiveSpread: number, minSpreadFloor: number, bidDistancePct: number, askDistancePct: number, bidDistanceAbs: number, askDistanceAbs: number } {
         const baseWealth = this.baseBalance * midPrice;
         const totalWealth = baseWealth + this.quoteBalance;
 
@@ -42,7 +42,9 @@ export class InventoryManager {
             volatilityMultiplier = 1 + ((volatilityPct - baselineVol) / baselineVol);
         }
         
-        const effectiveSpread = Math.max(this.BASE_SPREAD_PCT, minSpreadFloor) * volatilityMultiplier;
+        const zeroFeeSpread = 0.00015; // 0.015% — tight spread for zero-fee pairs
+        const spreadBase = isZeroFee ? zeroFeeSpread : this.BASE_SPREAD_PCT;
+        const effectiveSpread = Math.max(spreadBase, minSpreadFloor) * volatilityMultiplier;
         const baseHalfSpread = effectiveSpread / 2;
 
         // 3. Asymmetric Spread Adjustment
@@ -71,6 +73,21 @@ export class InventoryManager {
         // Keeping reservationPrice logic compatible (just pseudo-mid for telemetry if needed)
         const reservationPrice = midPrice * (1 - q * this.GAMMA * 0.1); 
 
-        return { bid, ask, bidEnabled, askEnabled, q, reservationPrice, effectiveSpread, minSpreadFloor };
+        // Top-of-book distance metrics
+        let bidDistancePct = 0;
+        let askDistancePct = 0;
+        let bidDistanceAbs = 0;
+        let askDistanceAbs = 0;
+
+        if (bestBid > 0) {
+            bidDistancePct = (bestBid - bid) / bestBid * 100;
+            bidDistanceAbs = bestBid - bid;
+        }
+        if (bestAsk > 0) {
+            askDistancePct = (ask - bestAsk) / bestAsk * 100;
+            askDistanceAbs = ask - bestAsk;
+        }
+
+        return { bid, ask, bidEnabled, askEnabled, q, reservationPrice, effectiveSpread, minSpreadFloor, bidDistancePct, askDistancePct, bidDistanceAbs, askDistanceAbs };
     }
 }
