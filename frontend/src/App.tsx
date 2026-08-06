@@ -292,7 +292,7 @@ function App() {
       {showLiveModal && (
         <div className="confirmation-modal-overlay">
           <div className="confirmation-modal-content">
-            <h2>⚠️ Ativar Modo LIVE</h2>
+            <h2>Ativar Modo LIVE</h2>
             <p>Você está prestes a ativar o modo de trading real. Ordens reais serão executadas com dinheiro da sua conta Binance.</p>
             <input 
               type="text" 
@@ -331,13 +331,13 @@ function App() {
               className={`mode-toggle-option ${tradingMode === 'SIMULATION' ? 'active sim' : ''}`}
               onClick={() => handleToggleMode("SIMULATION")}
             >
-              📊 SIMULATION
+              SIMULATION
             </div>
             <div 
               className={`mode-toggle-option ${tradingMode === 'LIVE' ? 'active live' : ''}`}
               onClick={() => handleToggleMode("LIVE")}
             >
-              ⚡ LIVE
+              LIVE
             </div>
           </div>
 
@@ -365,7 +365,7 @@ function App() {
 
       
       <div className="mm-controls-panel glass-panel" style={{ margin: '8px 0', padding: '12px' }}>
-        <div className="panel-title" style={{ marginBottom: '8px' }}>⚡ Market Making Telemetry & Tuning</div>
+        <div className="panel-title" style={{ marginBottom: '8px' }}>Market Making Telemetry & Tuning</div>
         
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '30px', alignItems: 'center' }}>
           <div>
@@ -527,7 +527,7 @@ function App() {
                   setIsEditingSimBalance(!isEditingSimBalance);
                   if (!isEditingSimBalance) setSimBalanceInput(balance?.toString() || simBalance.toString());
                 }}>
-                  ✏️
+                  ✎
                 </span>
               )}
             </div>
@@ -542,7 +542,7 @@ function App() {
                     onKeyDown={e => e.key === 'Enter' && handleSimBalanceSubmit()}
                     autoFocus
                   />
-                  <span className="sim-balance-confirm" onClick={handleSimBalanceSubmit}>✔️</span>
+                  <span className="sim-balance-confirm" onClick={handleSimBalanceSubmit}>✓</span>
                 </div>
               ) : (
                 balance !== null ? `${balance.toFixed(2)}` : '--'
@@ -557,16 +557,16 @@ function App() {
             </div>
           </div>
           <div className="glass-panel metric-card">
-            <div className="panel-title">📍 Top of Book Distance</div>
+            <div className="panel-title">Top of Book Distance</div>
             <div className="metric-value" style={{ fontSize: '13px', lineHeight: '1.6' }}>
               {telemetry?.bidDistancePct !== undefined ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                   <span style={{ color: telemetry.bidDistancePct < 0.01 ? 'var(--color-up)' : telemetry.bidDistancePct < 0.05 ? '#eab308' : '#ef4444' }}>
-                    Bid: {telemetry.bidDistancePct < 0.001 ? '🎯 TOP' : `-${telemetry.bidDistancePct.toFixed(4)}%`}
+                    Bid: {telemetry.bidDistancePct < 0.001 ? 'TOP' : `-${telemetry.bidDistancePct.toFixed(4)}%`}
                     {telemetry.bidDistanceAbs !== undefined && telemetry.bidDistanceAbs > 0 ? ` ($${telemetry.bidDistanceAbs.toFixed(2)})` : ''}
                   </span>
                   <span style={{ color: telemetry.askDistancePct < 0.01 ? 'var(--color-up)' : telemetry.askDistancePct < 0.05 ? '#eab308' : '#ef4444' }}>
-                    Ask: {telemetry.askDistancePct < 0.001 ? '🎯 TOP' : `+${telemetry.askDistancePct.toFixed(4)}%`}
+                    Ask: {telemetry.askDistancePct < 0.001 ? 'TOP' : `+${telemetry.askDistancePct.toFixed(4)}%`}
                     {telemetry.askDistanceAbs !== undefined && telemetry.askDistanceAbs > 0 ? ` ($${telemetry.askDistanceAbs.toFixed(2)})` : ''}
                   </span>
                 </div>
@@ -574,7 +574,7 @@ function App() {
             </div>
           </div>
           <div className="glass-panel metric-card">
-            <div className="panel-title">🧮 Adaptive Spread (Auto)</div>
+            <div className="panel-title">Adaptive Spread (Auto)</div>
             <div className="metric-value" style={{ fontSize: '12px', lineHeight: '1.7' }}>
               {telemetry?.effectiveSpread !== undefined ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
@@ -604,7 +604,7 @@ function App() {
 
         {systemErrors.length > 0 && (
           <div className="glass-panel error-panel" style={{ gridColumn: '1 / -1', borderLeft: '4px solid #ef4444' }}>
-            <div className="panel-title" style={{ color: '#ef4444' }}>⚠️ System Errors & Alerts</div>
+            <div className="panel-title" style={{ color: '#ef4444' }}>System Errors & Alerts</div>
             <div className="error-logs" style={{ maxHeight: '150px', overflowY: 'auto', padding: '10px', fontFamily: 'monospace', fontSize: '12px', color: '#fca5a5' }}>
               {systemErrors.map((err, idx) => (
                 <div key={idx} style={{ marginBottom: '4px' }}>• {err}</div>
