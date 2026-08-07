@@ -37,11 +37,11 @@ export class BinanceOrderExecutor implements OrderExecutor {
     }
   }
 
-  public async executeMakerBuy(pair: Pair, amount: Amount, price?: Amount, ttlMs = 2500): Promise<OrderFill> {
+  public async executeMakerBuy(pair: Pair, amount: Amount, price?: Amount, ttlMs = 1000): Promise<OrderFill> {
     return this.sendWsOrder("BUY", pair, amount, price, ttlMs);
   }
 
-  public async executeMakerSell(pair: Pair, amount: Amount, price?: Amount, ttlMs = 2500): Promise<OrderFill> {
+  public async executeMakerSell(pair: Pair, amount: Amount, price?: Amount, ttlMs = 1000): Promise<OrderFill> {
     return this.sendWsOrder("SELL", pair, amount, price, ttlMs);
   }
 
@@ -51,7 +51,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
     return this.rateLimiter.hasCapacityFor(count);
   }
 
-  private async sendWsOrder(side: string, pair: Pair, amount: Amount, price?: Amount, ttlMs = 2500): Promise<OrderFill> {
+  private async sendWsOrder(side: string, pair: Pair, amount: Amount, price?: Amount, ttlMs = 1000): Promise<OrderFill> {
     await this.ensureConnected();
 
     if (!this.wsClient.isReady()) {

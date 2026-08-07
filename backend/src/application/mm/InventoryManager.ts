@@ -5,10 +5,10 @@ export class InventoryManager {
 
     // Adaptive Spread Parameters (all auto-calculated, no manual input needed)
     // SAFETY_MULTIPLIER: How many times the measured volatility the spread must cover.
-    // At 3.0x, if volatility is 0.02%, spread = 0.06%. This covers ~99.7% of price movements (3-sigma).
-    public SAFETY_MULTIPLIER = 3.0;
-    // ABSOLUTE_MIN_SPREAD: Hard floor to prevent zero-spread in dead markets (0.01% = 1 basis point)
-    public ABSOLUTE_MIN_SPREAD = 0.0001;
+    // At 5.0x, it is much more conservative and protects against sudden price swings.
+    public SAFETY_MULTIPLIER = 5.0;
+    // ABSOLUTE_MIN_SPREAD: Hard floor to prevent zero-spread in dead markets (0.05% = 5 basis points)
+    public ABSOLUTE_MIN_SPREAD = 0.0005;
 
     // Legacy field kept for dashboard compatibility — now auto-calculated, not used as primary spread
     public BASE_SPREAD_PCT = 0.001;

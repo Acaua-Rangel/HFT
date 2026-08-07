@@ -73,12 +73,12 @@ export class MarketMakerCycle {
 
         if (bidEnabled && bid > 0 && buyLotQuote >= MIN_ORDER_VALUE) {
             const quoteToSpend = new Amount(buyLotQuote); 
-            promises.push(this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(bid)));
+            promises.push(this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(bid), 1000));
         }
 
         if (askEnabled && ask > 0 && (sellBaseQty * midPrice) >= MIN_ORDER_VALUE) {
             const baseToSell = new Amount(sellBaseQty);
-            promises.push(this.executor.executeMakerSell(pair, baseToSell, new Amount(ask)));
+            promises.push(this.executor.executeMakerSell(pair, baseToSell, new Amount(ask), 1000));
         }
 
         if (promises.length > 0) {
