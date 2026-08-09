@@ -73,6 +73,7 @@ const InfoTooltip = ({ text }: { text: string }) => (
 
 function App() {
   const [gamma, setGamma] = useState<number>(0.1);
+  const [safetyMultiplier, setSafetyMultiplier] = useState<number>(5.0);
 
   const [maxInventorySkew, setMaxInventorySkew] = useState<number>(0.4);
   const [telemetry, setTelemetry] = useState<any>(null);
@@ -136,6 +137,7 @@ function App() {
             if (data.balance !== undefined) setBalance(data.balance);
             if (data.bnbBalance !== undefined) setBnbBalance(data.bnbBalance);
             if (data.gamma !== undefined) setGamma(data.gamma);
+            if (data.safetyMultiplier !== undefined) setSafetyMultiplier(data.safetyMultiplier);
 
             if (data.maxInventorySkew !== undefined) setMaxInventorySkew(data.maxInventorySkew);
             if (data.bnbDiscountLocked !== undefined) setBnbDiscountLocked(data.bnbDiscountLocked);
@@ -143,6 +145,7 @@ function App() {
             setTelemetry(data);
             if (data.mode !== undefined) setTradingMode(data.mode);
             if (data.gamma !== undefined) setGamma(data.gamma);
+            if (data.safetyMultiplier !== undefined) setSafetyMultiplier(data.safetyMultiplier);
 
             if (data.maxInventorySkew !== undefined) setMaxInventorySkew(data.maxInventorySkew);
             if (data.lotMode !== undefined) setLotMode(data.lotMode);
@@ -390,6 +393,21 @@ function App() {
               }} style={{ width: '100%', accentColor: '#3b82f6' }} />
             </div>
             
+            <div className="control-group" style={{ marginBottom: '15px' }}>
+              <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ display: 'flex', alignItems: 'center' }}>
+                  Safety Multiplier (Spread):
+                  <InfoTooltip text="Multiplica a volatilidade para definir a distância (spread) da sua ordem. Menor = ordens mais frequentes. Maior = mais proteção." />
+                </span>
+                <strong>{safetyMultiplier.toFixed(1)}x</strong>
+              </label>
+              <input type="range" min="1.0" max="10.0" step="0.5" value={safetyMultiplier} onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setSafetyMultiplier(val);
+                wsRef.current?.send(JSON.stringify({ type: "UPDATE_MM_PARAMS", safetyMultiplier: val }));
+              }} style={{ width: '100%', accentColor: '#3b82f6' }} />
+            </div>
+
             <div className="control-group">
               <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <span style={{ display: 'flex', alignItems: 'center' }}>

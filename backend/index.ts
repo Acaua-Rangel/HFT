@@ -217,6 +217,7 @@ const server = Bun.serve({
                     baseBalance: inventoryManager.baseBalance,
                     quoteBalance: inventoryManager.quoteBalance,
                     gamma: inventoryManager.GAMMA,
+                    safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
                     baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
                     maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
                     errors: latestErrors,
@@ -237,6 +238,7 @@ const server = Bun.serve({
                     baseBalance: inventoryManager.baseBalance,
                     quoteBalance: inventoryManager.quoteBalance,
                     gamma: inventoryManager.GAMMA,
+                    safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
                     baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
                     maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
                     errors: latestErrors,
@@ -245,6 +247,7 @@ const server = Bun.serve({
                 }));
             } else if (data.type === "UPDATE_MM_PARAMS") {
                 if (data.gamma !== undefined) inventoryManager.GAMMA = data.gamma;
+                if (data.safetyMultiplier !== undefined) inventoryManager.SAFETY_MULTIPLIER = data.safetyMultiplier;
                 if (data.baseSpreadPct !== undefined) inventoryManager.BASE_SPREAD_PCT = data.baseSpreadPct;
                 if (data.maxInventorySkew !== undefined) inventoryManager.MAX_INVENTORY_SKEW = data.maxInventorySkew;
                 console.log(`🔧 Updated MM Params: Gamma=${inventoryManager.GAMMA}, Spread=${inventoryManager.BASE_SPREAD_PCT}, MaxSkew=${inventoryManager.MAX_INVENTORY_SKEW}`);
@@ -311,6 +314,7 @@ setInterval(() => {
         baseSymbol: baseSym,
         quoteSymbol: quoteSym,
         gamma: inventoryManager.GAMMA,
+        safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
         baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
         maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
         latency: currentLatency,
