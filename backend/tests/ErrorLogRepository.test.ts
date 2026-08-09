@@ -1,5 +1,6 @@
 import { expect, test, describe, beforeEach, mock } from "bun:test";
-import { ErrorLogRepository, ErrorLogEntry, LogId, Timestamp, ErrorType, ErrorMessage, StackTrace, ErrorContext } from "../src/infrastructure/database/ErrorLogRepository";
+import { ErrorLogRepository, ErrorLogEntry, ErrorType, ErrorMessage, StackTrace, ErrorContext } from "../src/infrastructure/database/ErrorLogRepository";
+import { LogId, Timestamp } from "../src/infrastructure/database/TransactionRepository";
 
 class MockAsyncDatabaseWriter {
     public enqueuedQueries: any[] = [];

@@ -314,7 +314,6 @@ setInterval(() => {
         baseSymbol: baseSym,
         quoteSymbol: quoteSym,
         gamma: inventoryManager.GAMMA,
-        safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
         baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
         maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
         latency: currentLatency,

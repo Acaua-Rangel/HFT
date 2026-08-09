@@ -14,7 +14,7 @@ class MockExecutor implements OrderExecutor {
     async executeMakerSell() { return {} as any; }
     async executeMarketBuy() { return {} as any; }
     async executeMarketSell() { return {} as any; }
-    async canExecuteBatch() { return true; }
+    canExecuteBatch() { return true; }
 }
 
 describe("MarketMakerCycle", () => {

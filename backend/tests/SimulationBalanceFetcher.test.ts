@@ -4,8 +4,8 @@ import { SimulationOrderExecutor } from "../src/infrastructure/SimulationOrderEx
 
 describe("SimulationBalanceFetcher", () => {
     it("should return balances from SimulationOrderExecutor", async () => {
-        const executor = new SimulationOrderExecutor();
-        executor.setInitialBalances(1.5, 50000, 10);
+        const executor = new SimulationOrderExecutor({} as any, {} as any, {} as any, {} as any);
+        executor.setInitialBalances(1.5, 50000);
 
         const fetcher = new SimulationBalanceFetcher(executor);
         const balances = await fetcher.fetchBalances();
@@ -19,8 +19,8 @@ describe("SimulationBalanceFetcher", () => {
     });
 
     it("should return balances for dynamic pair", async () => {
-        const executor = new SimulationOrderExecutor();
-        executor.setInitialBalances(10, 1000, 5);
+        const executor = new SimulationOrderExecutor({} as any, {} as any, {} as any, {} as any);
+        executor.setInitialBalances(10, 1000);
 
         const fetcher = new SimulationBalanceFetcher(executor);
         const balances = await fetcher.fetchBalancesForPair("ETH", "USDT");
