@@ -123,6 +123,13 @@ export class BinanceOrderExecutor implements OrderExecutor {
               this.logError("ORDER_REJECTED_POST_ONLY_CROSSING", JSON.stringify(placeRes.error));
           } else {
               this.logError("ORDER_REJECTED", JSON.stringify(placeRes.error));
+              
+              // If it's an insufficient balance error, we might have ghost orders locking our funds.
+              // We trigger a safety sweep to cancel all orders and release stuck funds.
+              if (placeRes.error?.code === -2010) {
+                  console.log(`⚠️ [-2010] Insufficient balance detected! Auto-sweeping ghost orders for ${symbol}...`);
+                  this.wsClient.sendRequest("openOrders.cancelAll", { symbol }, 5000).catch(() => {});
+              }
           }
           return null;
       }

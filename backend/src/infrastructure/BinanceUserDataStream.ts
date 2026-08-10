@@ -73,21 +73,31 @@ export class BinanceUserDataStream {
                 console.log("🔴 [UserDataStream] Disconnected");
                 this.stopKeepAlive();
                 this.ws = null;
+                
+                // Auto-reconnect after 5 seconds if we still have a listenKey
+                if (this.listenKey) {
+                    console.log("🔄 [UserDataStream] Attempting to reconnect in 5s...");
+                    setTimeout(() => {
+                        this.connect().catch(err => console.error("Failed to reconnect", err));
+                    }, 5000);
+                }
             };
         });
     }
 
     public disconnect(): void {
         this.stopKeepAlive();
+        const oldListenKey = this.listenKey;
+        this.listenKey = null; // Clear listenKey FIRST so onclose doesn't try to reconnect
+        
         if (this.ws) {
             this.ws.close();
             this.ws = null;
         }
-        if (this.listenKey && this.wsApiClient.isReady()) {
+        if (oldListenKey && this.wsApiClient.isReady()) {
             // Best effort close
-            this.wsApiClient.sendRequest("userDataStream.stop", { listenKey: this.listenKey }, 2000, false).catch(() => {});
+            this.wsApiClient.sendRequest("userDataStream.stop", { listenKey: oldListenKey }, 2000, false).catch(() => {});
         }
-        this.listenKey = null;
     }
 
     public onOrderFilled(cb: (report: ExecutionReport) => void): void {
