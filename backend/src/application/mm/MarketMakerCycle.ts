@@ -19,10 +19,18 @@ export class MarketMakerCycle {
     public hangingBuyOrders: ActiveOrder[] = [];
     public hangingSellOrders: ActiveOrder[] = [];
 
-    private readonly TOLERANCE_PCT = 0.0005; // 0.05% price deviation tolerance
-    private readonly MAX_ORDER_AGE_MS = 3000; // 3 seconds
+    // Reposicionar uma ordem custa prioridade de fila: a ordem nova volta para o fim
+    // da fila. Cancelar de forma agressiva significa que a única maneira de ser
+    // executado é o preço atravessar a ordem — ou seja, apenas quando estamos errados.
+    // Estes três parâmetros seguem a semântica do Hummingbot (order_refresh_time,
+    // max_order_age, order_refresh_tolerance_pct).
+    private readonly ORDER_REFRESH_TIME_MS = 30000; // intervalo mínimo entre reposicionamentos
+    private readonly MAX_ORDER_AGE_MS = 60000;      // idade máxima absoluta de uma ordem
+    private readonly MIN_TOLERANCE_PCT = 0.0005;    // piso da tolerância de desvio de preço
+    private lastRefreshAt = 0;
+
     private readonly PING_PONG_SPREAD = 0.001; // 0.1% minimum profit for ping-pong
-    
+
     public currentPair: Pair | null = null;
 
     constructor(
@@ -107,28 +115,26 @@ export class MarketMakerCycle {
         this.hangingSellOrders = this.hangingSellOrders.filter(o => o.orderId !== report.clientOrderId && o.orderId !== report.orderId.toString());
     }
 
-    private async checkAndCancelOrder(
-        order: ActiveOrder | null, 
-        newTargetPrice: number
-    ): Promise<boolean> {
-        if (!order) return true; // Already clear
-        
-        const priceDeviation = Math.abs(order.price - newTargetPrice) / newTargetPrice;
-        const age = TimeProvider.now() - order.timestamp;
-        
-        if (priceDeviation > this.TOLERANCE_PCT || age > this.MAX_ORDER_AGE_MS) {
-            await this.executor.cancelOrder(order);
-            return true; // Cleared
-        }
-        return false; // Keep active
-    }
-
-    public async executeTick(pair: Pair, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false, k: number = 1.5): Promise<void> {
+    public async executeTick(pair: Pair, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false, k: number = 1.5, minNotional: number = 10): Promise<void> {
         this.currentPair = pair;
-        
+
+        const levels = this.inventoryManager.ORDER_LEVELS;
+
         // Ensure arrays match InventoryManager levels
-        while (this.activeBuyOrders.length < this.inventoryManager.ORDER_LEVELS) this.activeBuyOrders.push(null);
-        while (this.activeSellOrders.length < this.inventoryManager.ORDER_LEVELS) this.activeSellOrders.push(null);
+        while (this.activeBuyOrders.length < levels) this.activeBuyOrders.push(null);
+        while (this.activeSellOrders.length < levels) this.activeSellOrders.push(null);
+
+        // Se ORDER_LEVELS diminuiu em runtime, os níveis excedentes ficariam órfãos:
+        // nunca mais seriam avaliados, mas seguiriam descontando saldo. Cancela e descarta.
+        if (this.activeBuyOrders.length > levels || this.activeSellOrders.length > levels) {
+            const orphans = [
+                ...this.activeBuyOrders.slice(levels),
+                ...this.activeSellOrders.slice(levels),
+            ].filter((o): o is ActiveOrder => o !== null);
+            this.activeBuyOrders.length = levels;
+            this.activeSellOrders.length = levels;
+            await Promise.all(orphans.map(o => this.executor.cancelOrder(o).catch(() => {})));
+        }
 
         if (this.circuitBreaker.shouldPause(pair)) {
             // Cancel all active orders if circuit breaker triggers (Hanging orders are optionally kept, but we'll cancel them for safety)
@@ -158,7 +164,7 @@ export class MarketMakerCycle {
         tick.applyTopBid(l => { if (l) l.price.apply(v => bestBid = v); });
         tick.applyTopAsk(l => { if (l) l.price.apply(v => bestAsk = v); });
 
-        let { bids, asks, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk, k);
+        let { bids, asks, bidEnabled, askEnabled, q, effectiveSpread } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk, k);
 
         // Enforce Post-Only limits for the tightest level (Level 0)
         // If the tightest level crosses, we adjust all levels relative to it
@@ -178,36 +184,81 @@ export class MarketMakerCycle {
 
         const totalWealth = (this.inventoryManager.baseBalance * midPrice) + this.inventoryManager.quoteBalance;
         const MAX_ORDER_VALUE = totalWealth * 0.60;
+        const MIN_ORDER_VALUE = minNotional;
 
-        let baseLotQuote = this.lotConfig.mode === "PERCENTAGE" 
-            ? totalWealth * this.lotConfig.value 
+        if (MAX_ORDER_VALUE < MIN_ORDER_VALUE) {
+            this.logStuck(`CAPITAL INSUFICIENTE: patrimônio ${totalWealth.toFixed(2)} permite no máximo ${MAX_ORDER_VALUE.toFixed(2)} por ordem, mas o mínimo da exchange é ${MIN_ORDER_VALUE.toFixed(2)}. Nenhuma cotação é possível.`);
+            return;
+        }
+
+        let baseLotQuote = this.lotConfig.mode === "PERCENTAGE"
+            ? totalWealth * this.lotConfig.value
             : this.lotConfig.value;
 
-        const MIN_ORDER_VALUE = 10;
-        baseLotQuote = Math.max(baseLotQuote, MIN_ORDER_VALUE);
-        baseLotQuote = Math.min(baseLotQuote, MAX_ORDER_VALUE);
-
+        // O skew de estoque é aplicado ANTES do piso de notional mínimo.
+        // A ordem inversa (piso antes do skew) fazia o skew empurrar o lote de volta
+        // para baixo do mínimo, bloqueando o nível — e como o skew só encolhe o lado
+        // comprador quando estamos long, o lado da compra morria em silêncio enquanto
+        // o da venda seguia ativo, produzindo deriva estrutural de estoque.
         let buyLotQuote = baseLotQuote * Math.max(0.2, 1 - q * 1.5);
         let sellLotQuote = baseLotQuote * Math.max(0.2, 1 + q * 1.5);
+
+        // O notional mínimo é uma restrição rígida da corretora, não uma preferência de
+        // risco: se o skew pedir menos que o mínimo, postamos o mínimo para manter os
+        // dois lados cotados. O corte de risco de verdade continua sendo o
+        // bidEnabled/askEnabled do InventoryManager (MAX_INVENTORY_SKEW).
+        buyLotQuote = Math.min(Math.max(buyLotQuote, MIN_ORDER_VALUE), MAX_ORDER_VALUE);
+        sellLotQuote = Math.min(Math.max(sellLotQuote, MIN_ORDER_VALUE), MAX_ORDER_VALUE);
 
         this.currentEffectiveBuyLotQuote = buyLotQuote;
         this.currentEffectiveSellLotQuote = sellLotQuote;
 
+        // --- Decisão de reposicionamento (semântica do Hummingbot) ---
+        // Só cancelamos quando alguma ordem estourou a idade máxima, ou quando o preço
+        // saiu da tolerância E já passou o intervalo mínimo de refresh. Fora disso as
+        // ordens ficam paradas acumulando prioridade de fila.
+        const now = TimeProvider.now();
+        const tolerancePct = Math.max(this.MIN_TOLERANCE_PCT, effectiveSpread * 0.5);
+
+        let priceDrifted = false;
+        let ageExceeded = false;
+        for (let i = 0; i < levels; i++) {
+            const b = this.activeBuyOrders[i];
+            if (b) {
+                if (Math.abs(b.price - bids[i]!.price) / bids[i]!.price > tolerancePct) priceDrifted = true;
+                if (now - b.timestamp > this.MAX_ORDER_AGE_MS) ageExceeded = true;
+            }
+            const s = this.activeSellOrders[i];
+            if (s) {
+                if (Math.abs(s.price - asks[i]!.price) / asks[i]!.price > tolerancePct) priceDrifted = true;
+                if (now - s.timestamp > this.MAX_ORDER_AGE_MS) ageExceeded = true;
+            }
+        }
+
+        const refreshWindowOpen = now - this.lastRefreshAt >= this.ORDER_REFRESH_TIME_MS;
+        if (ageExceeded || (priceDrifted && refreshWindowOpen)) {
+            this.lastRefreshAt = now;
+            const cancels: Promise<unknown>[] = [];
+            for (let i = 0; i < levels; i++) {
+                const b = this.activeBuyOrders[i];
+                if (b) { cancels.push(this.executor.cancelOrder(b)); this.activeBuyOrders[i] = null; }
+                const s = this.activeSellOrders[i];
+                if (s) { cancels.push(this.executor.cancelOrder(s)); this.activeSellOrders[i] = null; }
+            }
+            // Em paralelo: serializados, 2×ORDER_LEVELS round-trips cabiam mal no ciclo.
+            await Promise.all(cancels);
+        }
+
         const promises: Promise<void>[] = [];
 
-        for (let i = 0; i < this.inventoryManager.ORDER_LEVELS; i++) {
+        for (let i = 0; i < levels; i++) {
             const targetBid = bids[i]!.price;
             const targetAsk = asks[i]!.price;
             const buyLevelQuote = buyLotQuote * bids[i]!.amountFactor;
             const sellLevelBase = (sellLotQuote * asks[i]!.amountFactor) / midPrice;
 
-            // Active Order Tracking & Cancellation per level
-            const buyCleared = await this.checkAndCancelOrder(this.activeBuyOrders[i] ?? null, targetBid);
-            if (buyCleared) this.activeBuyOrders[i] = null;
-            
-            const sellCleared = await this.checkAndCancelOrder(this.activeSellOrders[i] ?? null, targetAsk);
-            if (sellCleared) this.activeSellOrders[i] = null;
-            
+            // Cancelamentos já foram resolvidos em bloco acima; aqui só preenchemos
+            // os níveis vazios (ordem executada, cancelada ou ainda não colocada).
             // Place new orders if empty
             let lockedQuote = 0;
             for (const o of this.activeBuyOrders) {

@@ -17,7 +17,10 @@ export class InventoryManager {
     public quoteBalance: number = 0;
 
     // Advanced Hummingbot Order Levels
-    public ORDER_LEVELS = 3;
+    // 3 níveis com fatores 1/1.5/2 exigem 4.5× o lote base por lado. Com capital pequeno
+    // cada nível cai abaixo do notional mínimo da exchange e o lado inteiro é bloqueado.
+    // Default do Hummingbot para pure market making é 1; suba conforme o capital crescer.
+    public ORDER_LEVELS = 1;
     public LEVEL_SPREAD_STEP = 0.0005; // 0.05%
     public LEVEL_AMOUNT_FACTOR = 0.5; // Level 0: 1x, Level 1: 1.5x, Level 2: 2.0x
 

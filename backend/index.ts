@@ -220,7 +220,11 @@ async function startHftEngine() {
                 
                 const currentK = tradeIntensityMonitor.getK(mmPair);
 
-                await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK);
+                let loopSymbol = "";
+                mmPair.applyBinanceSymbol(s => loopSymbol = s);
+                const minNotional = precisionFetcher.getMinNotional(loopSymbol);
+
+                await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK, minNotional);
             } catch (err) {
                 console.error("MM Loop Error:", err);
             }
@@ -505,8 +509,12 @@ async function executeBacktest(startTime: number, endTime: number, initialBalanc
             const feeRate = isZeroFeePromo ? 0 : 0.001;
             const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
             const currentK = tradeIntensityMonitor.getK(mmPair);
-            
-            await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK);
+
+            let btSymbol = "";
+            mmPair.applyBinanceSymbol(s => btSymbol = s);
+            const minNotional = precisionFetcher.getMinNotional(btSymbol);
+
+            await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK, minNotional);
             lastMMLoop = TimeProvider.now();
         }
         
