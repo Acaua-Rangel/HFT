@@ -1,4 +1,5 @@
 import { OrderExecutor, ActiveOrder } from "../domain/interfaces/OrderExecutor";
+import { BinanceUserDataStream, ExecutionReport } from "./BinanceUserDataStream";
 import { Amount } from "../domain/valueObjects/Amount";
 import { Pair } from "../domain/valueObjects/Pair";
 import { OrderFill } from "../domain/valueObjects/OrderFill";
@@ -33,6 +34,11 @@ export class SimulationOrderExecutor implements OrderExecutor {
         private readonly precisionFetcher: BinancePrecisionFetcher,
         private readonly stateManager: StateManager
     ) {}
+
+    private userDataStream?: BinanceUserDataStream;
+    public setUserDataStream(uds: BinanceUserDataStream): void {
+        this.userDataStream = uds;
+    }
 
     // --- Public getters for balance access from index.ts ---
     public get baseBalance(): number { return this._baseBalance; }
@@ -85,55 +91,8 @@ export class SimulationOrderExecutor implements OrderExecutor {
             await new Promise(r => setTimeout(r, simWait));
         }
 
-        const fillRoll = Math.random();
-        let fillRatio = 0;
-        if (fillRoll < 0.75) {
-            fillRatio = 0;
-        } else if (fillRoll < 0.90) {
-            fillRatio = 0.1 + Math.random() * 0.8;
-        } else {
-            fillRatio = 1.0;
-        }
-
-        const quantityDecimals = this.precisionFetcher.getQuantityDecimals(order.symbol);
-        const factor = Math.pow(10, quantityDecimals);
-        const filledQty = Math.floor(simData.truncatedQty * fillRatio * factor) / factor;
-
-        if (filledQty <= 0) return OrderFill.failed();
-
-        const filledQuote = filledQty * order.price;
-
-        let isFdusd = false;
-        let baseSym = "";
-        simData.pair.applyCurrencies((b, q) => {
-           b.applySymbol(s => baseSym = s.toUpperCase());
-           q.applySymbol(s => isFdusd = s.toUpperCase() === "FDUSD");
-        });
-        const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
-        const isZeroFeePromo = isFdusd && zeroFeePromoBases.includes(baseSym);
-        const feeRate = isZeroFeePromo ? 0 : this.BASE_FEE_RATE;
-
-        let feeInQuote = 0;
-        if (order.side === "BUY") {
-            this._quoteBalance -= filledQuote;
-            const feeBase = filledQty * feeRate;
-            this._baseBalance += (filledQty - feeBase);
-            feeInQuote = feeBase * order.price;
-        } else {
-            this._baseBalance -= filledQty;
-            const feeQuote = filledQuote * feeRate;
-            this._quoteBalance += (filledQuote - feeQuote);
-            feeInQuote = feeQuote;
-        }
-
-        this.totalFeesCollected += feeInQuote;
-
-        const executedQtyAmt = new Amount(filledQty);
-        const cummulativeQuoteQtyAmt = new Amount(filledQuote);
-        const averagePriceAmt = new Amount(order.price);
-
-        this.logTrade(order.symbol, executedQtyAmt, averagePriceAmt, "SIM_LIMIT_MAKER");
-        return new OrderFill(executedQtyAmt, cummulativeQuoteQtyAmt, averagePriceAmt, true);
+        // Return failed since the order was explicitly canceled before being filled
+        return OrderFill.failed();
     }
 
     public async cancelAllOrders(pair: Pair): Promise<void> {
@@ -146,6 +105,104 @@ export class SimulationOrderExecutor implements OrderExecutor {
             }
         });
         console.log(`🧹 [SIM] Canceled all open orders for ${symbol}.`);
+    }
+
+    public evaluateFills(bestBid: number, bestAsk: number): void {
+        const toDelete: string[] = [];
+
+        for (const [orderId, simData] of this.activeOrders.entries()) {
+            const { order, pair, amountVal, truncatedQty } = simData;
+            
+            let filled = false;
+            if (order.side === "BUY") {
+                if (bestAsk > 0 && bestAsk < order.price) {
+                    filled = true;
+                }
+            } else {
+                if (bestBid > 0 && bestBid > order.price) {
+                    filled = true;
+                }
+            }
+
+            if (filled) {
+                const filledQty = truncatedQty;
+                const filledQuote = filledQty * order.price;
+
+                let quoteSym = "";
+                let baseSym = "";
+                pair.applyCurrencies((b, q) => {
+                   b.applySymbol(s => baseSym = s.toUpperCase());
+                   q.applySymbol(s => quoteSym = s.toUpperCase());
+                });
+                
+                const isFdusd = quoteSym === "FDUSD";
+                const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
+                const isZeroFeePromo = isFdusd && zeroFeePromoBases.includes(baseSym);
+                const feeRate = isZeroFeePromo ? 0 : this.BASE_FEE_RATE;
+
+                let feeInQuote = 0;
+                let commission = 0;
+                let commissionAsset = "";
+
+                if (order.side === "BUY") {
+                    this._quoteBalance -= filledQuote;
+                    const feeBase = filledQty * feeRate;
+                    this._baseBalance += (filledQty - feeBase);
+                    feeInQuote = feeBase * order.price;
+                    commission = feeBase;
+                    commissionAsset = baseSym;
+                } else {
+                    this._baseBalance -= filledQty;
+                    const feeQuote = filledQuote * feeRate;
+                    this._quoteBalance += (filledQuote - feeQuote);
+                    feeInQuote = feeQuote;
+                    commission = feeQuote;
+                    commissionAsset = quoteSym;
+                }
+
+                this.totalFeesCollected += feeInQuote;
+
+                const executedQtyAmt = new Amount(filledQty);
+                const cummulativeQuoteQtyAmt = new Amount(filledQuote);
+                const averagePriceAmt = new Amount(order.price);
+
+                this.logTrade(order.symbol, executedQtyAmt, averagePriceAmt, "SIM_LIMIT_MAKER");
+                
+                if (this.userDataStream) {
+                    let mockOrderIdNum = 0;
+                    try {
+                        const numericPart = orderId.replace(/[^0-9]/g, '').substring(0, 8);
+                        mockOrderIdNum = numericPart ? parseInt(numericPart) : Date.now();
+                    } catch(e) { mockOrderIdNum = Date.now(); }
+
+                    const report: ExecutionReport = {
+                        symbol: order.symbol,
+                        orderId: mockOrderIdNum,
+                        clientOrderId: orderId,
+                        side: order.side,
+                        type: "LIMIT",
+                        timeInForce: "GTC",
+                        originalQty: truncatedQty,
+                        originalPrice: order.price,
+                        executionType: "TRADE",
+                        orderStatus: "FILLED",
+                        lastFilledQty: filledQty,
+                        accumulatedFilledQty: filledQty,
+                        lastFilledPrice: order.price,
+                        commissionAsset: commissionAsset,
+                        commission: commission,
+                        tradeTime: TimeProvider.now()
+                    };
+                    this.userDataStream.pushMockReport(report);
+                }
+
+                toDelete.push(orderId);
+            }
+        }
+
+        for (const id of toDelete) {
+            this.activeOrders.delete(id);
+        }
     }
 
     private async simulateOrder(side: "BUY"|"SELL", pair: Pair, amount: Amount, price: Amount | undefined): Promise<ActiveOrder | null> {

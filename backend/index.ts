@@ -71,6 +71,9 @@ const tradeIntensityMonitor = new TradeIntensityMonitor(ingestor);
 const riskManager = new RiskManager();
 
 const userDataStream = new BinanceUserDataStream(globalWsClient);
+// Bind userDataStream to simulation executor
+simExecutor.setUserDataStream(userDataStream);
+
 // Only connect UserDataStream if running in LIVE mode (starts disconnected in SIMULATION)
 
 // Start in SIMULATION mode by default
@@ -475,6 +478,19 @@ async function executeBacktest(startTime: number, endTime: number, initialBalanc
         
         inventoryManager.baseBalance = simExecutor.baseBalance;
         inventoryManager.quoteBalance = simExecutor.quoteBalance;
+
+        // Evaluate simulation fills on every historical tick
+        const book = stateManager.retrieveOrderBook(mmPair);
+        let bestBid = 0;
+        let bestAsk = 0;
+        if (book) {
+            const tickObj = book.getLatest();
+            if (tickObj) {
+                tickObj.applyTopBid((l) => { if (l) l.price.apply(v => bestBid = v); });
+                tickObj.applyTopAsk((l) => { if (l) l.price.apply(v => bestAsk = v); });
+                simExecutor.evaluateFills(bestBid, bestAsk);
+            }
+        }
 
         // Run MM loop every 2s of virtual time
         if (TimeProvider.now() - lastMMLoop >= 2000) {

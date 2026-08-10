@@ -108,6 +108,16 @@ export class BinanceUserDataStream {
         this.onOrderCanceledCallbacks.push(cb);
     }
 
+    public pushMockReport(report: ExecutionReport): void {
+        if (report.orderStatus === "FILLED" || report.orderStatus === "PARTIALLY_FILLED") {
+            if (report.executionType === "TRADE") {
+                this.onOrderFilledCallbacks.forEach(cb => cb(report));
+            }
+        } else if (report.orderStatus === "CANCELED" || report.orderStatus === "REJECTED" || report.orderStatus === "EXPIRED") {
+            this.onOrderCanceledCallbacks.forEach(cb => cb(report));
+        }
+    }
+
     private handleMessage(data: any): void {
         if (data.e === "executionReport") {
             const report: ExecutionReport = {
