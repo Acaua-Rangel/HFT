@@ -81,21 +81,22 @@ export class InventoryManager {
         const timeHorizon = 1.0; 
 
         // 1. Reservation Price (r)
-        // r = s - q * gamma * sigma^2 * T
-        // We scale the variance impact by 100 to make it meaningful for typical crypto volatility percentages
-        const reservationPrice = midPrice * (1 - q * this.GAMMA * variance * timeHorizon * 100);
+        // Para que o GAMMA (Risk Aversion) tenha um impacto real e intuitivo, o ajuste de preço 
+        // agora escala linearmente com a volatilidade (stddev) em vez da variância, pois a variância (sigma^2)
+        // de pequenas porcentagens (ex: 0.1%) é virtualmente zero (0.000001).
+        // Se GAMMA = 1.0 e skew máximo (q=0.5), o preço se desloca exatamente o tamanho da volatilidade atual.
+        const reservationPrice = midPrice * (1 - q * this.GAMMA * volatilityPct * 2);
 
         // 2. Optimal Spread (delta)
-        // delta = gamma * sigma^2 * T + (2/gamma) * ln(1 + gamma/k)
-        // Scaled by 1000 to output a reasonable base percentage (e.g. 0.00128 = 0.128%)
-        const avellanedaSpreadPct = (this.GAMMA * variance * timeHorizon) + ((2 / this.GAMMA) * Math.log(1 + (this.GAMMA / k))) / 1000;
+        // Usamos uma aproximação do spread de Avellaneda + BASE_SPREAD_PCT para que o controle manual funcione.
+        const avellanedaSpreadPct = this.BASE_SPREAD_PCT + (this.GAMMA * variance * timeHorizon) + ((2 / Math.max(this.GAMMA, 0.01)) * Math.log(1 + (this.GAMMA / k))) / 1000;
 
         // === SAFETY FLOORS ===
         const feeFloor = feeRate > 0 ? 2 * feeRate * 1.5 : 0;
         const absoluteFloor = this.ABSOLUTE_MIN_SPREAD;
         const volatilityFloor = this.SAFETY_MULTIPLIER * volatilityPct;
 
-        const minSpreadFloor = Math.max(feeFloor, volatilityFloor, absoluteFloor);
+        const minSpreadFloor = Math.max(feeFloor, volatilityFloor, absoluteFloor, this.BASE_SPREAD_PCT);
         const effectiveSpread = Math.max(avellanedaSpreadPct, minSpreadFloor);
         const baseHalfSpread = effectiveSpread / 2;
 
