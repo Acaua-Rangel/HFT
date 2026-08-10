@@ -31,6 +31,11 @@ class MockPrecisionFetcher {
     if (symbol.includes("ETH")) return 0.01;
     return 0.0001; // Meme coins
   }
+
+  getMinNotional(_symbol: string): number {
+    return 0; // Os testes de precisão calculam sua própria quantidade esperada; um
+              // mínimo de 0 garante que o arredondamento por notional nunca interfira.
+  }
 }
 
 // Mock WebSocket Client
@@ -283,5 +288,45 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     await executor.cancelAllOrders(pair);
 
     expect(mockClient.lastParams.symbol).toBe("BTCBRL");
+  });
+
+  // Regressão do -1013 "Filter failure: NOTIONAL" visto em produção: o chamador dimensiona
+  // a ordem para bater o mínimo da exchange ANTES do truncamento por stepSize, e o
+  // truncamento (sempre para baixo) pode derrubar o notional de volta abaixo do mínimo.
+  test("NOTIONAL guard - bumps quantity up when step-size truncation would fall below minNotional", async () => {
+    class MinNotionalPrecisionFetcher extends MockPrecisionFetcher {
+      override getMinNotional(_symbol: string): number { return 5; }
+    }
+
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MinNotionalPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any, mockStateManager as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
+
+    // $5,00 exatos a $64.500: floor ingênuo ao stepSize (5 casas, BTC) dá 0,00007 BTC =
+    // $4,515 — abaixo do minNotional de $5. A ordem enviada precisa ter sido ajustada.
+    await executor.executeMakerBuy(pair, new Amount(5), new Amount(64500));
+
+    expect(mockClient.lastPlaceParams).not.toBeNull();
+    const sentQty = parseFloat(mockClient.lastPlaceParams.quantity);
+    const sentPrice = parseFloat(mockClient.lastPlaceParams.price);
+    expect(sentQty * sentPrice).toBeGreaterThanOrEqual(5);
+  });
+
+  test("NOTIONAL guard - leaves quantity untouched when it already clears minNotional", async () => {
+    class MinNotionalPrecisionFetcher extends MockPrecisionFetcher {
+      override getMinNotional(_symbol: string): number { return 5; }
+    }
+
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MinNotionalPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any, mockStateManager as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
+
+    await executor.executeMakerBuy(pair, new Amount(100), new Amount(64500));
+
+    const sentQty = parseFloat(mockClient.lastPlaceParams.quantity);
+    // 100 / 64500 truncado a 5 casas = 0.00155 — nenhum ajuste deveria ocorrer.
+    expect(sentQty).toBeCloseTo(0.00155, 10);
   });
 });

@@ -98,10 +98,25 @@ export class BinanceOrderExecutor implements OrderExecutor {
         baseQuantityRaw = amountVal;
     }
 
-    const truncatedQty = Math.floor(baseQuantityRaw * factor) / factor;
+    let truncatedQty = Math.floor(baseQuantityRaw * factor) / factor;
     if (truncatedQty <= 0) {
         this.logError("ORDER_TRUNCATED_TO_ZERO", `Raw qty ${baseQuantityRaw} truncated to 0`);
         return null;
+    }
+
+    // O chamador dimensiona a ordem para bater o notional mínimo ANTES do truncamento de
+    // quantidade acima. Como o truncamento sempre arredonda para baixo ao stepSize, ele
+    // pode derrubar o notional de volta abaixo do mínimo — ex.: pedir exatamente $5,00 de
+    // BTCFDUSD (minNotional=5) a ~$64.500 vira 0,00007 BTC após o floor, ou seja $4,52,
+    // e a Binance rejeita com -1013 "Filter failure: NOTIONAL". Em vez de mandar uma ordem
+    // que sabemos que vai quicar, arredondamos a quantidade para CIMA até o menor step que
+    // cobre o mínimo. O overshoot é sempre < 1 step (aqui, <$1 de notional) — se isso
+    // estourar o saldo disponível, a exchange rejeita com -2010, que já tem tratamento
+    // (auto-sweep de ghost orders) mais abaixo.
+    const minNotional = this.precisionFetcher.getMinNotional(symbol);
+    if (truncatedQty * roundedPrice < minNotional && roundedPrice > 0) {
+        const requiredQty = minNotional / roundedPrice;
+        truncatedQty = Math.ceil(requiredQty * factor) / factor;
     }
 
     const params: any = {

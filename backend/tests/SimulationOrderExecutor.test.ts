@@ -29,6 +29,9 @@ class MockPrecisionFetcher {
     getQuantityDecimals(symbol: string): number {
         return 2;
     }
+    getMinNotional(symbol: string): number {
+        return 0;
+    }
 }
 
 describe.skip("SimulationOrderExecutor", () => {
@@ -265,5 +268,63 @@ describe.skip("SimulationOrderExecutor", () => {
 
         // It should be empty
         expect(executor["activeOrders"].size).toBe(0);
+    });
+});
+
+// Regressão: o chamador (MarketMakerCycle) dimensiona a ordem para bater o notional
+// mínimo da exchange ANTES do truncamento por stepSize. Como o truncamento sempre
+// arredonda a quantidade para baixo, ele pode derrubar o notional de volta abaixo do
+// mínimo — reproduzido ao vivo como -1013 "Filter failure: NOTIONAL". Estes testes usam
+// as interfaces atuais (ActiveOrder | null, sem o .apply() do OrderFill legado acima) e
+// não dependem da suíte desativada.
+describe("SimulationOrderExecutor - minNotional enforcement", () => {
+    const pair = new Pair(new Currency("BTC"), new Currency("FDUSD"));
+
+    class MinNotionalPrecisionFetcher {
+        getPriceTickSize(_symbol: string): number { return 0.01; }
+        getQuantityDecimals(_symbol: string): number { return 5; } // stepSize 0.00001, como BTCFDUSD
+        getMinNotional(_symbol: string): number { return 5; }
+    }
+
+    const buildExecutor = () => new SimulationOrderExecutor(
+        new MockErrorLogRepository() as any,
+        new MockTransactionRepository() as any,
+        new MinNotionalPrecisionFetcher() as unknown as BinancePrecisionFetcher,
+        {} as unknown as StateManager
+    );
+
+    test("bumps a BUY quantity up when step-size truncation would fall below minNotional", async () => {
+        const executor = buildExecutor();
+        executor.setInitialBalances(0, 1000);
+
+        // $5,00 exatos a $64.500: floor ingênuo ao stepSize dá 0,00007 BTC = $4,515,
+        // abaixo do minNotional de $5. O executor deve arredondar para cima.
+        const order = await executor.executeMakerBuy(pair, new Amount(5), new Amount(64500));
+
+        expect(order).not.toBeNull();
+        const notional = order!.qty * order!.price;
+        expect(notional).toBeGreaterThanOrEqual(5);
+    });
+
+    test("bumps a SELL quantity up when step-size truncation would fall below minNotional", async () => {
+        const executor = buildExecutor();
+        executor.setInitialBalances(1, 0);
+
+        const order = await executor.executeMakerSell(pair, new Amount(0.0000775), new Amount(64500));
+
+        expect(order).not.toBeNull();
+        const notional = order!.qty * order!.price;
+        expect(notional).toBeGreaterThanOrEqual(5);
+    });
+
+    test("does not bump when the order already clears minNotional", async () => {
+        const executor = buildExecutor();
+        executor.setInitialBalances(0, 1000);
+
+        const order = await executor.executeMakerBuy(pair, new Amount(100), new Amount(64500));
+
+        expect(order).not.toBeNull();
+        // 100 / 64500 truncado a 5 casas = 0.00155 — nenhum ajuste deveria ocorrer.
+        expect(order!.qty).toBeCloseTo(0.00155, 10);
     });
 });

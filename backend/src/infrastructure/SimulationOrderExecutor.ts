@@ -293,8 +293,18 @@ export class SimulationOrderExecutor implements OrderExecutor {
             baseQuantityRaw = amountVal;
         }
 
-        const truncatedQty = Math.floor(baseQuantityRaw * factor) / factor;
+        let truncatedQty = Math.floor(baseQuantityRaw * factor) / factor;
         if (truncatedQty <= 0) return null;
+
+        // Espelha o mesmo arredondamento para cima do BinanceOrderExecutor: o truncamento
+        // ao stepSize pode derrubar o notional de volta abaixo do mínimo da exchange. Sem
+        // isso o simulador aceita silenciosamente ordens que a Binance real rejeitaria com
+        // -1013 NOTIONAL, divergindo do comportamento ao vivo.
+        const minNotional = this.precisionFetcher.getMinNotional(symbol);
+        if (truncatedQty * roundedPrice < minNotional && roundedPrice > 0) {
+            const requiredQty = minNotional / roundedPrice;
+            truncatedQty = Math.ceil(requiredQty * factor) / factor;
+        }
 
         if (side === "BUY") {
             const costQuote = truncatedQty * roundedPrice;
