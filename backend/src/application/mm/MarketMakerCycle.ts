@@ -41,9 +41,15 @@ export class MarketMakerCycle {
 
         let { bid, ask, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk);
 
-        // Enforce Post-Only limits: never cross the spread
-        if (bestBid > 0) bid = Math.min(bid, bestBid);
-        if (bestAsk > 0) ask = Math.max(ask, bestAsk);
+        // Enforce Post-Only limits: never cross the spread (prevent becoming a taker)
+        // Bid cannot be equal to or higher than the best Ask
+        if (bestAsk > 0 && bid >= bestAsk) {
+            bid = bestAsk * 0.99999;
+        }
+        // Ask cannot be equal to or lower than the best Bid
+        if (bestBid > 0 && ask <= bestBid) {
+            ask = bestBid * 1.00001;
+        }
 
         const totalWealth = (this.inventoryManager.baseBalance * midPrice) + this.inventoryManager.quoteBalance;
         const MAX_ORDER_VALUE = totalWealth * 0.60;

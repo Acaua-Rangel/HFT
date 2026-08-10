@@ -86,7 +86,11 @@ export class BinanceWsClient {
     
     // Sort keys alphabetically for Binance signature
     const sortedKeys = Object.keys(payloadParams).sort();
-    const queryString = sortedKeys.map(k => `${k}=${payloadParams[k]}`).join('&');
+    const queryString = sortedKeys.map(k => {
+      const val = payloadParams[k];
+      const stringVal = typeof val === 'object' ? JSON.stringify(val) : val;
+      return `${k}=${stringVal}`;
+    }).join('&');
     const signature = createHmac("sha256", this.apiSecret).update(queryString).digest("hex");
     
     payloadParams.signature = signature;
