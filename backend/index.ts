@@ -342,7 +342,8 @@ setInterval(() => {
     const quotes = inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFeePromo, bestBid, bestAsk, tradeIntensityMonitor.getK(mmPair));
     
     // Calculate total value of hanging orders
-    const hangingOrdersValue = mmCycle.hangingOrders.reduce((acc, o) => {
+    const allHangingOrders = [...mmCycle.hangingBuyOrders, ...mmCycle.hangingSellOrders];
+    const hangingOrdersValue = allHangingOrders.reduce((acc, o) => {
         let val = 0;
         o.price.apply(p => { o.qty.apply(q => { val = p * q; }) });
         return acc + val;
@@ -387,7 +388,7 @@ setInterval(() => {
         intensityK: tradeIntensityMonitor.getK(mmPair),
         killSwitchEngaged: riskManager.isKillSwitchEngaged,
         hangingOrdersValue: hangingOrdersValue,
-        hangingOrdersCount: mmCycle.hangingOrders.length
+        hangingOrdersCount: allHangingOrders.length
     }));
 }, 1000);
 
