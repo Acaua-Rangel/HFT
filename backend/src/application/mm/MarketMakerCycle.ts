@@ -20,7 +20,7 @@ export class MarketMakerCycle {
     public hangingSellOrders: ActiveOrder[] = [];
 
     private readonly TOLERANCE_PCT = 0.0005; // 0.05% price deviation tolerance
-    private readonly MAX_ORDER_AGE_MS = 10000; // 10 seconds
+    private readonly MAX_ORDER_AGE_MS = 3000; // 3 seconds
     private readonly PING_PONG_SPREAD = 0.001; // 0.1% minimum profit for ping-pong
     
     public currentPair: Pair | null = null;
