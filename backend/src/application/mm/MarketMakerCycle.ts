@@ -208,19 +208,37 @@ export class MarketMakerCycle {
             if (sellCleared) this.activeSellOrders[i] = null;
             
             // Place new orders if empty
-            if (!this.activeBuyOrders[i] && bidEnabled && targetBid > 0 && buyLevelQuote >= MIN_ORDER_VALUE && buyLevelQuote <= this.inventoryManager.quoteBalance) {
+            let lockedQuote = 0;
+            for (const o of this.activeBuyOrders) {
+                if (o) lockedQuote += (o.qty * o.price);
+            }
+            
+            let lockedBase = 0;
+            for (const o of this.activeSellOrders) {
+                if (o) lockedBase += o.qty;
+            }
+
+            if (!this.activeBuyOrders[i] && bidEnabled && targetBid > 0 && buyLevelQuote >= MIN_ORDER_VALUE && (buyLevelQuote + lockedQuote) <= this.inventoryManager.quoteBalance) {
                 const quoteToSpend = new Amount(buyLevelQuote); 
+                this.activeBuyOrders[i] = { orderId: "-1", symbol: "", side: "BUY", price: targetBid, qty: buyLevelQuote / targetBid, timestamp: Date.now() }; // Optimistic lock
                 promises.push(
                     this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(targetBid))
-                    .then(order => { if (order) this.activeBuyOrders[i] = order; })
+                    .then(order => { 
+                        if (order) this.activeBuyOrders[i] = order; 
+                        else this.activeBuyOrders[i] = null;
+                    })
                 );
             }
 
-            if (!this.activeSellOrders[i] && askEnabled && targetAsk > 0 && (sellLevelBase * midPrice) >= MIN_ORDER_VALUE && sellLevelBase <= this.inventoryManager.baseBalance) {
+            if (!this.activeSellOrders[i] && askEnabled && targetAsk > 0 && (sellLevelBase * midPrice) >= MIN_ORDER_VALUE && (sellLevelBase + lockedBase) <= this.inventoryManager.baseBalance) {
                 const baseToSell = new Amount(sellLevelBase);
+                this.activeSellOrders[i] = { orderId: "-1", symbol: "", side: "SELL", price: targetAsk, qty: sellLevelBase, timestamp: Date.now() }; // Optimistic lock
                 promises.push(
                     this.executor.executeMakerSell(pair, baseToSell, new Amount(targetAsk))
-                    .then(order => { if (order) this.activeSellOrders[i] = order; })
+                    .then(order => { 
+                        if (order) this.activeSellOrders[i] = order; 
+                        else this.activeSellOrders[i] = null;
+                    })
                 );
             }
         }
