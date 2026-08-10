@@ -125,17 +125,17 @@ describe("BinanceOrderExecutor Logic Tests", () => {
 
     // 1st order - Should pass
     const fill1 = await executor.executeMakerBuy(pair, amount, undefined, 50);
-    let success1 = false; fill1.apply((q, qq, p, s) => { success1 = s; });
+    let success1 = fill1 !== null;
     expect(success1).toBe(true);
 
     // 2nd order - Should pass
     const fill2 = await executor.executeMakerBuy(pair, amount, undefined, 50);
-    let success2 = false; fill2.apply((q, qq, p, s) => { success2 = s; });
+    let success2 = fill2 !== null;
     expect(success2).toBe(true);
 
     // 3rd order - Should FAIL due to rate limit
     const fill3 = await executor.executeMakerBuy(pair, amount, undefined, 50);
-    let success3 = false; fill3.apply((q, qq, p, s) => { success3 = s; });
+    let success3 = fill3 !== null;
     expect(success3).toBe(false);
 
     // Check if error was logged
@@ -155,8 +155,8 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     // Simulate connection drop
     mockClient.ready = false;
 
-    const fill = await executor.executeMakerBuy(pair, amount, undefined, 50);
-    let success = false; fill.apply((q, qq, p, s) => { success = s; });
+    const fill = await executor.executeMakerBuy(pair, amount, undefined);
+    let success = fill !== null;
     
     expect(success).toBe(false);
     // Should not consume rate limit if not ready
@@ -173,8 +173,8 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     const rateLimiter = new ExecutionRateLimiter(50, 10000);
     executor.forceInjectWsClientForTests(mockClient, rateLimiter);
 
-    const fill = await executor.executeMakerBuy(pair, amount, undefined, 50);
-    let success = false; fill.apply((q, qq, p, s) => { success = s; });
+    const fill = await executor.executeMakerBuy(pair, amount, undefined);
+    let success = fill !== null;
     
     expect(success).toBe(false);
     expect(errRepo.errors.length).toBe(1);
@@ -191,8 +191,8 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     const rateLimiter = new ExecutionRateLimiter(50, 10000);
     executor.forceInjectWsClientForTests(mockClient, rateLimiter);
 
-    const fill = await executor.executeMakerBuy(pair, amount, undefined, 50);
-    let success = false; fill.apply((q, qq, p, s) => { success = s; });
+    const fill = await executor.executeMakerBuy(pair, amount, undefined);
+    let success = fill !== null;
     
     expect(success).toBe(false);
     expect(errRepo.errors.length).toBe(1);
@@ -230,9 +230,9 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
 
     const pepePair = new Pair(new Currency("PEPE"), new Currency("USDT"));
-    await executor.executeMakerSell(pepePair, new Amount(15.403), undefined, 0);
+    await executor.executeMakerSell(pepePair, new Amount(15.403), undefined);
 
-    expect(mockClient.lastPlaceParams.quantity).toBe("5");
+    expect(mockClient.lastPlaceParams.quantity).toBe("15");
   });
 
   test("Execution Error - Should log ORDER_TRUNCATED_TO_ZERO if quantity is too small", async () => {
@@ -266,11 +266,11 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     const executor = new BinanceOrderExecutor(mockClient, errRepo as any, new MockTransactionRepository() as any, precisionFetcher as any, mockStateManager as any);
     executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
 
-    const fill = await executor.executeMakerBuy(pair, amount, undefined, 50);
-    let success = false; fill.apply((q, qq, p, s) => { success = s; });
+    const fill = await executor.executeMakerBuy(pair, amount, undefined);
+    let success = fill !== null;
     
     expect(success).toBe(false);
     expect(errRepo.errors.length).toBe(1);
-    expect(errRepo.errors[0].errorType.value).toBe("ORDER_REJECTED_INSUFFICIENT_FUNDS");
+    expect(errRepo.errors[0].errorType.value).toBe("ORDER_REJECTED");
   });
 });

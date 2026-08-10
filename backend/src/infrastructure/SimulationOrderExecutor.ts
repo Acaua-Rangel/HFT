@@ -1,4 +1,4 @@
-import { OrderExecutor } from "../domain/interfaces/OrderExecutor";
+import { OrderExecutor, ActiveOrder } from "../domain/interfaces/OrderExecutor";
 import { Amount } from "../domain/valueObjects/Amount";
 import { Pair } from "../domain/valueObjects/Pair";
 import { OrderFill } from "../domain/valueObjects/OrderFill";
@@ -49,189 +49,138 @@ export class SimulationOrderExecutor implements OrderExecutor {
         return true;
     }
 
-    public async executeMakerBuy(pair: Pair, amount: Amount, price?: Amount, ttlMs = 2500): Promise<OrderFill> {
-        return this.simulateOrder("BUY", pair, amount, price, ttlMs);
+        private activeOrders = new Map<string, { order: ActiveOrder, pair: Pair, amountVal: number, truncatedQty: number }>();
+
+    public async executeMakerBuy(pair: Pair, amount: Amount, price?: Amount): Promise<ActiveOrder | null> {
+        return this.simulateOrder("BUY", pair, amount, price);
     }
 
-    public async executeMakerSell(pair: Pair, amount: Amount, price?: Amount, ttlMs = 2500): Promise<OrderFill> {
-        return this.simulateOrder("SELL", pair, amount, price, ttlMs);
+    public async executeMakerSell(pair: Pair, amount: Amount, price?: Amount): Promise<ActiveOrder | null> {
+        return this.simulateOrder("SELL", pair, amount, price);
     }
 
+    public async cancelOrder(order: ActiveOrder): Promise<OrderFill> {
+        const simData = this.activeOrders.get(order.orderId);
+        if (!simData) return OrderFill.failed();
+        this.activeOrders.delete(order.orderId);
 
+        // Simulate TTL wait
+        const ttlMs = 1500;
+        const simWait = ttlMs * (0.1 + Math.random() * 0.9);
+        await new Promise(r => setTimeout(r, simWait));
 
-    // ================================================================
-    // Core simulation: mirrors sendWsOrder from BinanceOrderExecutor
-    // ================================================================
-    private async simulateOrder(side: string, pair: Pair, amount: Amount, price: Amount | undefined, ttlMs: number): Promise<OrderFill> {
+        const fillRoll = Math.random();
+        let fillRatio = 0;
+        if (fillRoll < 0.75) {
+            fillRatio = 0;
+        } else if (fillRoll < 0.90) {
+            fillRatio = 0.1 + Math.random() * 0.8;
+        } else {
+            fillRatio = 1.0;
+        }
+
+        const quantityDecimals = this.precisionFetcher.getQuantityDecimals(order.symbol);
+        const factor = Math.pow(10, quantityDecimals);
+        const filledQty = Math.floor(simData.truncatedQty * fillRatio * factor) / factor;
+
+        if (filledQty <= 0) return OrderFill.failed();
+
+        const filledQuote = filledQty * order.price;
+
+        let isFdusd = false;
+        let baseSym = "";
+        simData.pair.applyCurrencies((b, q) => {
+           b.applySymbol(s => baseSym = s.toUpperCase());
+           q.applySymbol(s => isFdusd = s.toUpperCase() === "FDUSD");
+        });
+        const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
+        const isZeroFeePromo = isFdusd && zeroFeePromoBases.includes(baseSym);
+        const feeRate = isZeroFeePromo ? 0 : this.BASE_FEE_RATE;
+
+        let feeInQuote = 0;
+        if (order.side === "BUY") {
+            this._quoteBalance -= filledQuote;
+            const feeBase = filledQty * feeRate;
+            this._baseBalance += (filledQty - feeBase);
+            feeInQuote = feeBase * order.price;
+        } else {
+            this._baseBalance -= filledQty;
+            const feeQuote = filledQuote * feeRate;
+            this._quoteBalance += (filledQuote - feeQuote);
+            feeInQuote = feeQuote;
+        }
+
+        this.totalFeesCollected += feeInQuote;
+
+        const executedQtyAmt = new Amount(filledQty);
+        const cummulativeQuoteQtyAmt = new Amount(filledQuote);
+        const averagePriceAmt = new Amount(order.price);
+
+        this.logTrade(order.symbol, executedQtyAmt, averagePriceAmt, "SIM_LIMIT_MAKER");
+        return new OrderFill(executedQtyAmt, cummulativeQuoteQtyAmt, averagePriceAmt, true);
+    }
+
+    private async simulateOrder(side: "BUY"|"SELL", pair: Pair, amount: Amount, price: Amount | undefined): Promise<ActiveOrder | null> {
         let symbol = "";
         pair.applyBinanceSymbol((sym) => { symbol = sym; });
 
         let amountVal = 0;
         amount.apply((val) => { amountVal = val; });
 
-        const maxRetries = 3;
-        let accumulatedExecutedQty = 0;
-        let accumulatedQuoteQty = 0;
-
-        for (let attempt = 0; attempt < maxRetries; attempt++) {
-            try {
-                // ---- Step 1: Determine target price (same logic as real executor) ----
-                let targetPriceRaw = 0;
-                if (price) {
-                    price.apply(v => targetPriceRaw = v);
-                } else {
-                    const book = this.stateManager.retrieveOrderBook(pair);
-                    const tick = book.getLatest();
-                    if (!tick) break;
-                    const midPriceAmount = tick.getMidPrice();
-                    if (!midPriceAmount) break;
-                    midPriceAmount.apply(v => targetPriceRaw = v);
-                }
-
-                // ---- Step 2: Round price using real precision data ----
-                const tickSize = this.precisionFetcher.getPriceTickSize(symbol);
-                const quantityDecimals = this.precisionFetcher.getQuantityDecimals(symbol);
-
-                let roundedPrice = targetPriceRaw;
-                if (side === "BUY") {
-                    roundedPrice = Math.floor(targetPriceRaw / tickSize) * tickSize;
-                } else {
-                    roundedPrice = Math.ceil(targetPriceRaw / tickSize) * tickSize;
-                }
-
-                const factor = Math.pow(10, quantityDecimals);
-
-                // ---- Step 3: Calculate quantity (same logic as real executor) ----
-                let baseQuantityRaw = 0;
-                if (side === "BUY") {
-                    const remainingQuote = amountVal - accumulatedQuoteQty;
-                    if (remainingQuote <= 0) break;
-                    baseQuantityRaw = remainingQuote / roundedPrice;
-                } else {
-                    const remainingBase = amountVal - accumulatedExecutedQty;
-                    if (remainingBase <= 0) break;
-                    baseQuantityRaw = remainingBase;
-                }
-
-                const truncatedQty = Math.floor(baseQuantityRaw * factor) / factor;
-                if (truncatedQty <= 0) break;
-
-                // ---- Step 4: Check if we have sufficient virtual balance ----
-                if (side === "BUY") {
-                    const costQuote = truncatedQty * roundedPrice;
-                    if (costQuote > this._quoteBalance) {
-                        // Not enough quote balance - simulate a rejection like -2010
-                        if (attempt < maxRetries - 1) continue;
-                        break;
-                    }
-                } else {
-                    if (truncatedQty > this._baseBalance) {
-                        if (attempt < maxRetries - 1) continue;
-                        break;
-                    }
-                }
-
-                // ---- Step 5: Simulate TTL wait ----
-                // Em HFT real, ordens passivas (Maker) que são executadas geralmente sofrem execução
-                // logo no início (seleção adversa) ou perto do fim do TTL (quando chegam no topo da fila).
-                const simWait = ttlMs * (0.1 + Math.random() * 0.9);
-                await new Promise(r => setTimeout(r, simWait));
-
-                // ---- Step 6: Probabilistic fill simulation ----
-                // Mundo real HFT Maker: a taxa de preenchimento completo é muito baixa (ex: 5-10%).
-                // A maioria das ordens é cancelada sem preenchimento porque o mercado se move.
-                const fillRoll = Math.random();
-                let fillRatio: number;
-
-                if (fillRoll < 0.75) {
-                    // No fill (75%) - mercado se moveu contra, ou cancelada antes de preencher
-                    fillRatio = 0;
-                } else if (fillRoll < 0.90) {
-                    // Partial fill (15%) - beliscaram a ordem mas n levaram tudo
-                    fillRatio = 0.1 + Math.random() * 0.8;
-                } else {
-                    // Full fill (10%)
-                    fillRatio = 1.0;
-                }
-
-                const filledQty = Math.floor(truncatedQty * fillRatio * factor) / factor;
-
-                if (filledQty <= 0) {
-                    // Simulates the "order cancelled with 0 fill" path
-                    // On retry, the real executor would re-post
-                    continue;
-                }
-
-                const filledQuote = filledQty * roundedPrice;
-
-                // ---- Step 7: Apply trading fee ----
-                let isFdusd = false;
-                let baseSym = "";
-                pair.applyCurrencies((b, q) => {
-                   b.applySymbol(s => baseSym = s.toUpperCase());
-                   q.applySymbol(s => isFdusd = s.toUpperCase() === "FDUSD");
-                });
-                const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
-                const isZeroFeePromo = isFdusd && zeroFeePromoBases.includes(baseSym);
-                const feeRate = isZeroFeePromo ? 0 : this.BASE_FEE_RATE;
-
-                let feeInQuote = 0;
-                
-                // Binance deducts fee from the RECEIVED asset
-                if (side === "BUY") {
-                    this._quoteBalance -= filledQuote;
-                    const feeBase = filledQty * feeRate;
-                    this._baseBalance += (filledQty - feeBase);
-                    feeInQuote = feeBase * roundedPrice;
-                } else {
-                    this._baseBalance -= filledQty;
-                    const feeQuote = filledQuote * feeRate;
-                    this._quoteBalance += (filledQuote - feeQuote);
-                    feeInQuote = feeQuote;
-                }
-
-                this.totalFeesCollected += feeInQuote;
-
-                accumulatedExecutedQty += filledQty;
-                accumulatedQuoteQty += filledQuote;
-
-                // Check if fully filled
-                if (fillRatio >= 1.0) break;
-
-                // Check 99% threshold (same as real executor)
-                if (side === "BUY" && accumulatedQuoteQty >= amountVal * 0.99) break;
-                if (side === "SELL" && accumulatedExecutedQty >= amountVal * 0.99) break;
-
-                // Otherwise, retry with remaining amount (partial fill fallback)
-            } catch (err) {
-                this.logError("SIM_ORDER_EXCEPTION", err instanceof Error ? err.message : String(err));
-                break;
-            }
+        let targetPriceRaw = 0;
+        if (price) {
+            price.apply(v => targetPriceRaw = v);
+        } else {
+            const book = this.stateManager.retrieveOrderBook(pair);
+            const tick = book.getLatest();
+            if (!tick) return null;
+            const midPriceAmount = tick.getMidPrice();
+            if (!midPriceAmount) return null;
+            midPriceAmount.apply(v => targetPriceRaw = v);
         }
 
-        if (accumulatedExecutedQty === 0) {
-            return OrderFill.failed();
+        const tickSize = this.precisionFetcher.getPriceTickSize(symbol);
+        const quantityDecimals = this.precisionFetcher.getQuantityDecimals(symbol);
+
+        let roundedPrice = targetPriceRaw;
+        if (side === "BUY") {
+            roundedPrice = Math.floor(targetPriceRaw / tickSize) * tickSize;
+        } else {
+            roundedPrice = Math.ceil(targetPriceRaw / tickSize) * tickSize;
         }
 
-        const executedQtyAmt = new Amount(accumulatedExecutedQty);
-        const cummulativeQuoteQtyAmt = new Amount(accumulatedQuoteQty);
-
-        let averagePriceVal = 0;
-        if (accumulatedExecutedQty > 0) {
-            averagePriceVal = accumulatedQuoteQty / accumulatedExecutedQty;
+        const factor = Math.pow(10, quantityDecimals);
+        let baseQuantityRaw = 0;
+        if (side === "BUY") {
+            baseQuantityRaw = amountVal / roundedPrice;
+        } else {
+            baseQuantityRaw = amountVal;
         }
-        const averagePriceAmt = new Amount(averagePriceVal);
 
-        this.logTrade(symbol, executedQtyAmt, averagePriceAmt, "SIM_LIMIT_MAKER");
-        return new OrderFill(executedQtyAmt, cummulativeQuoteQtyAmt, averagePriceAmt, true);
+        const truncatedQty = Math.floor(baseQuantityRaw * factor) / factor;
+        if (truncatedQty <= 0) return null;
+
+        if (side === "BUY") {
+            const costQuote = truncatedQty * roundedPrice;
+            if (costQuote > this._quoteBalance) return null;
+        } else {
+            if (truncatedQty > this._baseBalance) return null;
+        }
+
+        const activeOrder: ActiveOrder = {
+            orderId: crypto.randomUUID(),
+            symbol,
+            side,
+            price: roundedPrice,
+            qty: truncatedQty,
+            timestamp: Date.now()
+        };
+
+        this.activeOrders.set(activeOrder.orderId, { order: activeOrder, pair, amountVal, truncatedQty });
+        return activeOrder;
     }
 
-
-
-    // ================================================================
-    // Logging (identical signatures to BinanceOrderExecutor)
-    // ================================================================
-    private logError(type: string, message: string): void {
+private logError(type: string, message: string): void {
         console.error(`[SIM][${type}] ${message}`);
         const entry = new ErrorLogEntry(
             { asString: () => crypto.randomUUID() } as any,

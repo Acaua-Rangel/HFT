@@ -151,8 +151,11 @@ async function startHftEngine() {
     const evaluationLock = new ExecutionLock();
 
     // Main MM Loop driven by time (continuous quoting) instead of ticks
-    setInterval(async () => {
-        if (!isEngineRunning) return;
+    async function runMarketMakerLoop() {
+        if (!isEngineRunning) {
+            setTimeout(runMarketMakerLoop, 2000);
+            return;
+        }
 
         await evaluationLock.runIfUnlocked(async () => {
             try {
@@ -175,7 +178,11 @@ async function startHftEngine() {
                 console.error("MM Loop Error:", err);
             }
         });
-    }, 2000);
+
+        setTimeout(runMarketMakerLoop, 2000);
+    }
+    
+    runMarketMakerLoop();
 
     // Also update state on ticks
     ingestor.onTick((tick) => {

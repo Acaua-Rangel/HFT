@@ -33,7 +33,7 @@ export class InventoryManager {
      * 2. The expected adverse price movement while holding inventory
      * 3. A minimum floor for ultra-quiet markets
      */
-    public getQuotes(
+        public getQuotes(
         midPrice: number, 
         feeRate: number = 0.001, 
         volatilityPct: number = 0, 
@@ -67,48 +67,32 @@ export class InventoryManager {
             }
         }
 
-        // === ADAPTIVE SPREAD CALCULATION ===
-        // 1. Fee floor: covers round-trip fees with 50% safety margin
-        const feeFloor = feeRate > 0 ? 2 * feeRate * 1.5 : 0;
+        // === TRUE AVELLANEDA-STOIKOV MATHEMATICS ===
+        const k = 1.5; // Trade intensity (liquidity parameter)
+        const variance = volatilityPct * volatilityPct;
+        const timeHorizon = 1.0; 
 
-        // 2. Volatility floor: covers expected price movement during holding period
-        //    volatilityPct = stddev(prices) / mean(prices) over 60s window
-        //    SAFETY_MULTIPLIER scales it to cover worst-case movements (3-sigma by default)
+        // 1. Reservation Price (r)
+        // r = s - q * gamma * sigma^2 * T
+        // We scale the variance impact by 100 to make it meaningful for typical crypto volatility percentages
+        const reservationPrice = midPrice * (1 - q * this.GAMMA * variance * timeHorizon * 100);
+
+        // 2. Optimal Spread (delta)
+        // delta = gamma * sigma^2 * T + (2/gamma) * ln(1 + gamma/k)
+        // Scaled by 1000 to output a reasonable base percentage (e.g. 0.00128 = 0.128%)
+        const avellanedaSpreadPct = (this.GAMMA * variance * timeHorizon) + ((2 / this.GAMMA) * Math.log(1 + (this.GAMMA / k))) / 1000;
+
+        // === SAFETY FLOORS ===
+        const feeFloor = feeRate > 0 ? 2 * feeRate * 1.5 : 0;
+        const absoluteFloor = this.ABSOLUTE_MIN_SPREAD;
         const volatilityFloor = this.SAFETY_MULTIPLIER * volatilityPct;
 
-        // 3. Absolute minimum: prevents zero-spread in ultra-quiet markets
-        const absoluteFloor = this.ABSOLUTE_MIN_SPREAD;
-
-        // Final spread = the maximum of all three floors
         const minSpreadFloor = Math.max(feeFloor, volatilityFloor, absoluteFloor);
-        const effectiveSpread = minSpreadFloor;
+        const effectiveSpread = Math.max(avellanedaSpreadPct, minSpreadFloor);
         const baseHalfSpread = effectiveSpread / 2;
 
-        // === ASYMMETRIC SPREAD ADJUSTMENT (inventory skew) ===
-        let bidDistance = baseHalfSpread;
-        let askDistance = baseHalfSpread;
-        
-        // GAMMA * 10 as scaler: GAMMA 0.1 -> 1x multiplier per max q(0.5)
-        const skewScaler = this.GAMMA * 10;
-
-        if (q > 0) {
-            // Long base asset: Widen bid (harder to buy more), tighten ask (easier to sell)
-            bidDistance = baseHalfSpread * (1 + q * skewScaler);
-            askDistance = Math.max(absoluteFloor / 2, baseHalfSpread * (1 - q * skewScaler));
-        } else if (q < 0) {
-            // Short base asset: Tighten bid (easier to buy), widen ask (harder to sell)
-            bidDistance = Math.max(absoluteFloor / 2, baseHalfSpread * (1 - Math.abs(q) * skewScaler));
-            askDistance = baseHalfSpread * (1 + Math.abs(q) * skewScaler);
-        }
-
-        bidDistance = Math.max(0, bidDistance);
-        askDistance = Math.max(0, askDistance);
-
-        const bid = midPrice * (1 - bidDistance);
-        const ask = midPrice * (1 + askDistance);
-
-        // Reservation price for telemetry
-        const reservationPrice = midPrice * (1 - q * this.GAMMA * 0.1); 
+        let bid = reservationPrice * (1 - baseHalfSpread);
+        let ask = reservationPrice * (1 + baseHalfSpread);
 
         // Top-of-book distance metrics
         let bidDistancePct = 0;

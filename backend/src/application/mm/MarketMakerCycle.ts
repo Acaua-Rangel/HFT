@@ -1,5 +1,5 @@
 import { Pair } from "../../domain/valueObjects/Pair";
-import { OrderExecutor } from "../../domain/interfaces/OrderExecutor";
+import { OrderExecutor, ActiveOrder } from "../../domain/interfaces/OrderExecutor";
 import { Amount } from "../../domain/valueObjects/Amount";
 import { LocalStateManager } from "../LocalStateManager";
 import { CircuitBreaker } from "./CircuitBreaker";
@@ -10,6 +10,13 @@ export class MarketMakerCycle {
     
     public currentEffectiveBuyLotQuote: number = 0;
     public currentEffectiveSellLotQuote: number = 0;
+
+    public activeBuyOrder: ActiveOrder | null = null;
+    public activeSellOrder: ActiveOrder | null = null;
+
+    private readonly TOLERANCE_PCT = 0.0005; // 0.05% price deviation tolerance
+    private readonly MAX_ORDER_AGE_MS = 10000; // 10 seconds
+
     constructor(
         private stateManager: LocalStateManager,
         private circuitBreaker: CircuitBreaker,
@@ -17,9 +24,34 @@ export class MarketMakerCycle {
         public executor: OrderExecutor
     ) {}
 
+    private async checkAndCancelOrder(
+        order: ActiveOrder | null, 
+        newTargetPrice: number
+    ): Promise<ActiveOrder | null> {
+        if (!order) return null;
+        
+        const priceDeviation = Math.abs(order.price - newTargetPrice) / newTargetPrice;
+        const age = Date.now() - order.timestamp;
+        
+        if (priceDeviation > this.TOLERANCE_PCT || age > this.MAX_ORDER_AGE_MS) {
+            await this.executor.cancelOrder(order);
+            return null; // Cleared
+        }
+        return order; // Keep active
+    }
+
     public async executeTick(pair: Pair, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false): Promise<void> {
         if (this.circuitBreaker.shouldPause(pair)) {
-            return; // Paused by risk
+            // Cancel all active orders if circuit breaker triggers
+            if (this.activeBuyOrder) {
+                await this.executor.cancelOrder(this.activeBuyOrder);
+                this.activeBuyOrder = null;
+            }
+            if (this.activeSellOrder) {
+                await this.executor.cancelOrder(this.activeSellOrder);
+                this.activeSellOrder = null;
+            }
+            return;
         }
 
         const book = this.stateManager.retrieveOrderBook(pair);
@@ -41,12 +73,10 @@ export class MarketMakerCycle {
 
         let { bid, ask, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk);
 
-        // Enforce Post-Only limits: never cross the spread (prevent becoming a taker)
-        // Bid cannot be equal to or higher than the best Ask
+        // Enforce Post-Only limits: never cross the spread
         if (bestAsk > 0 && bid >= bestAsk) {
             bid = bestAsk * 0.99999;
         }
-        // Ask cannot be equal to or lower than the best Bid
         if (bestBid > 0 && ask <= bestBid) {
             ask = bestBid * 1.00001;
         }
@@ -58,39 +88,44 @@ export class MarketMakerCycle {
             ? totalWealth * this.lotConfig.value 
             : this.lotConfig.value;
 
-        // Limite mínimo de ordem (ex: R$ 10 ou 10 FDUSD)
         const MIN_ORDER_VALUE = 10;
         baseLotQuote = Math.max(baseLotQuote, MIN_ORDER_VALUE);
         baseLotQuote = Math.min(baseLotQuote, MAX_ORDER_VALUE);
 
-        // Ajuste assimétrico de lote por inventário
         let buyLotQuote = baseLotQuote * Math.max(0.2, 1 - q * 1.5);
         let sellLotQuote = baseLotQuote * Math.max(0.2, 1 + q * 1.5);
 
-        // Validar limites de saldo
         buyLotQuote = Math.min(buyLotQuote, this.inventoryManager.quoteBalance);
         let sellBaseQty = sellLotQuote / midPrice;
         sellBaseQty = Math.min(sellBaseQty, this.inventoryManager.baseBalance);
 
         this.currentEffectiveBuyLotQuote = buyLotQuote;
         this.currentEffectiveSellLotQuote = sellLotQuote;
-        
-        const promises: Promise<any>[] = [];
 
-        if (bidEnabled && bid > 0 && buyLotQuote >= MIN_ORDER_VALUE) {
+        // Active Order Tracking & Cancellation
+        this.activeBuyOrder = await this.checkAndCancelOrder(this.activeBuyOrder, bid);
+        this.activeSellOrder = await this.checkAndCancelOrder(this.activeSellOrder, ask);
+        
+        const promises: Promise<void>[] = [];
+
+        if (!this.activeBuyOrder && bidEnabled && bid > 0 && buyLotQuote >= MIN_ORDER_VALUE) {
             const quoteToSpend = new Amount(buyLotQuote); 
-            promises.push(this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(bid)));
+            promises.push(
+                this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(bid))
+                .then(order => { if (order) this.activeBuyOrder = order; })
+            );
         }
 
-        if (askEnabled && ask > 0 && (sellBaseQty * midPrice) >= MIN_ORDER_VALUE) {
+        if (!this.activeSellOrder && askEnabled && ask > 0 && (sellBaseQty * midPrice) >= MIN_ORDER_VALUE) {
             const baseToSell = new Amount(sellBaseQty);
-            promises.push(this.executor.executeMakerSell(pair, baseToSell, new Amount(ask)));
+            promises.push(
+                this.executor.executeMakerSell(pair, baseToSell, new Amount(ask))
+                .then(order => { if (order) this.activeSellOrder = order; })
+            );
         }
 
         if (promises.length > 0) {
             await Promise.all(promises);
-            // After TTL, both will return their fills (which are logged internally).
-            // The index.ts loop can then run the next tick.
         }
     }
 }
