@@ -75,25 +75,34 @@ export class BinanceWsClient {
     return;
   }
 
-  public async sendRequest(method: string, params: any, timeoutMs: number = 3000): Promise<WsResponse> {
+  public async sendRequest(method: string, params: any, timeoutMs: number = 3000, signed: boolean = true): Promise<WsResponse> {
     if (!this.isReady()) {
       throw new Error("Cannot send request: WebSocket is not authenticated or connected");
     }
 
-    // Sign the request
-    const timestamp = Date.now();
-    const payloadParams = { ...params, apiKey: this.apiKey, timestamp };
+    let payloadParams: any = { ...params };
     
-    // Sort keys alphabetically for Binance signature
-    const sortedKeys = Object.keys(payloadParams).sort();
-    const queryString = sortedKeys.map(k => {
-      const val = payloadParams[k];
-      const stringVal = typeof val === 'object' ? JSON.stringify(val) : val;
-      return `${k}=${stringVal}`;
-    }).join('&');
-    const signature = createHmac("sha256", this.apiSecret).update(queryString).digest("hex");
-    
-    payloadParams.signature = signature;
+    // Always append apiKey if not present
+    if (!payloadParams.apiKey) {
+        payloadParams.apiKey = this.apiKey;
+    }
+
+    if (signed) {
+        // Sign the request
+        const timestamp = Date.now();
+        payloadParams.timestamp = timestamp;
+        
+        // Sort keys alphabetically for Binance signature
+        const sortedKeys = Object.keys(payloadParams).sort();
+        const queryString = sortedKeys.map(k => {
+          const val = payloadParams[k];
+          const stringVal = typeof val === 'object' ? JSON.stringify(val) : val;
+          return `${k}=${stringVal}`;
+        }).join('&');
+        const signature = createHmac("sha256", this.apiSecret).update(queryString).digest("hex");
+        
+        payloadParams.signature = signature;
+    }
 
     const req: WsRequest = {
       id: crypto.randomUUID(),

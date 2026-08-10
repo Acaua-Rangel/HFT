@@ -38,7 +38,7 @@ export class BinanceUserDataStream {
         }
 
         // 1. Fetch ListenKey
-        const startRes: WsResponse = await this.wsApiClient.sendRequest("userDataStream.start", {}, 3000);
+        const startRes: WsResponse = await this.wsApiClient.sendRequest("userDataStream.start", {}, 3000, false);
         if (startRes.status !== 200 || !startRes.result?.listenKey) {
             throw new Error(`Failed to start User Data Stream: ${JSON.stringify(startRes.error || startRes.result)}`);
         }
@@ -85,7 +85,7 @@ export class BinanceUserDataStream {
         }
         if (this.listenKey && this.wsApiClient.isReady()) {
             // Best effort close
-            this.wsApiClient.sendRequest("userDataStream.stop", { listenKey: this.listenKey }, 2000).catch(() => {});
+            this.wsApiClient.sendRequest("userDataStream.stop", { listenKey: this.listenKey }, 2000, false).catch(() => {});
         }
         this.listenKey = null;
     }
@@ -135,7 +135,7 @@ export class BinanceUserDataStream {
         this.keepAliveInterval = setInterval(async () => {
             if (this.listenKey && this.wsApiClient.isReady()) {
                 try {
-                    await this.wsApiClient.sendRequest("userDataStream.ping", { listenKey: this.listenKey }, 2000);
+                    await this.wsApiClient.sendRequest("userDataStream.ping", { listenKey: this.listenKey }, 2000, false);
                 } catch (err) {
                     console.error("[UserDataStream] Keep-alive failed, reconnecting...");
                     this.disconnect();
