@@ -4,7 +4,7 @@ import { Pair } from "../../domain/valueObjects/Pair";
 import { TimeProvider } from "../../infrastructure/TimeProvider";
 export class VolatilityMonitor {
     private readonly WINDOW_MS = 60000; // 60 seconds
-    private readonly THRESHOLD = 0.005; // 0.5% standard deviation over mean
+    private readonly THRESHOLD = 0.02; // 2.0% standard deviation over mean (increased to avoid false positives)
 
     private priceHistory: { ts: number; price: number }[] = [];
 
