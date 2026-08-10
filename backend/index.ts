@@ -37,7 +37,7 @@ console.error = (...args) => {
 console.log("🚀 Starting HFT Market Making Engine...");
 
 let isEngineRunning = false;
-let currentMode: "LIVE" | "SIMULATION" | "BACKTEST" = "SIMULATION"; // Default to SIMULATION for safety
+let currentMode: "LIVE" | "BACKTEST" = "BACKTEST"; // Default to BACKTEST for safety
 
 const dbPath = new DatabaseFilePath("./hft.sqlite");
 const db = DatabaseFactory.create(dbPath);
@@ -82,13 +82,13 @@ const fdusd = new Currency("FDUSD");
 const mmPair = new Pair(btc, fdusd);
 
 // --- Mode Switching Logic ---
-function switchMode(newMode: "LIVE" | "SIMULATION" | "BACKTEST", simQuoteBalance?: number) {
+function switchMode(newMode: "LIVE" | "BACKTEST", simQuoteBalance?: number) {
     if (newMode === currentMode) return;
 
     isEngineRunning = false; // Halt engine during switch
     currentMode = newMode;
 
-    if (newMode === "SIMULATION") {
+    if (newMode === "BACKTEST") {
         const initialQuote = simQuoteBalance ?? 1000;
         simExecutor.setInitialBalances(0, initialQuote);
         mmCycle.executor = simExecutor;
@@ -96,8 +96,8 @@ function switchMode(newMode: "LIVE" | "SIMULATION" | "BACKTEST", simQuoteBalance
         
         // Clear simulation orderbook
         simExecutor.cancelAllOrders(mmPair).catch(console.error);
-        console.log(`🧪 Switched to SIMULATION mode (Quote: ${initialQuote})`);
-    } else {
+        console.log(`🧪 Switched to BACKTEST mode (Quote: ${initialQuote})`);
+    } else if (newMode === "LIVE") {
         mmCycle.executor = binanceExecutor;
         userDataStream.connect().catch(console.error);
         
@@ -172,7 +172,7 @@ async function startHftEngine() {
 
     // Main MM Loop driven by time (continuous quoting) instead of ticks
     async function runMarketMakerLoop() {
-        if (!isEngineRunning || currentMode === "BACKTEST") {
+        if (!isEngineRunning) {
             setTimeout(runMarketMakerLoop, 2000);
             return;
         }
@@ -235,7 +235,7 @@ async function startHftEngine() {
 
     console.log("✅ Initialization Complete.");
     console.log(`📡 Quoting ${mmPair.toString()} on Market Maker Loop...`);
-    console.log(`🧪 Starting in SIMULATION mode (safe default)`);
+    console.log(`🧪 Starting in BACKTEST mode (safe default)`);
 }
 
 startHftEngine().catch(e => {
@@ -260,7 +260,7 @@ const server = Bun.serve({
             } else if (data.type === "RUN_BACKTEST") {
                 executeBacktest(data.startTime, data.endTime, data.initialBalance).catch(console.error);
             } else if (data.type === "TOGGLE_MODE") {
-                const newMode = data.mode === "LIVE" ? "LIVE" : "SIMULATION";
+                const newMode = data.mode === "LIVE" ? "LIVE" : "BACKTEST";
                 switchMode(newMode, data.simBalance);
                 // Broadcast updated status to all clients
                 server.publish("dashboard", JSON.stringify({
@@ -278,7 +278,7 @@ const server = Bun.serve({
                     lotValue: mmCycle.lotConfig.value
                 }));
             } else if (data.type === "SET_SIM_BALANCE") {
-                if (currentMode === "SIMULATION" && data.quoteBalance !== undefined) {
+                if (currentMode === "BACKTEST" && data.quoteBalance !== undefined) {
                     simExecutor.setInitialBalances(simExecutor.baseBalance, data.quoteBalance);
                     inventoryManager.quoteBalance = data.quoteBalance;
                     console.log(`🧪 [SIM] Quote balance updated to: ${data.quoteBalance}`);
