@@ -46,11 +46,52 @@ describe("CircuitBreaker", () => {
         const stateManager = new LocalStateManager();
         const volMonitor = new VolatilityMonitor(stateManager);
         const liqMonitor = new LiquidityMonitor(stateManager);
-        
+
         volMonitor.shouldPause = () => false;
         liqMonitor.shouldPause = () => true;
 
-        const cb = new CircuitBreaker(volMonitor, liqMonitor, () => 100); 
+        const cb = new CircuitBreaker(volMonitor, liqMonitor, () => 100);
         expect(cb.shouldPause(pair)).toBeTrue();
+    });
+
+    // Regressão: o backtest era vetado inteiro por "High Latency". A trava de latência
+    // protege a execução ao vivo; num backtest nenhuma ordem viaja até a exchange, e a
+    // medição ainda fica inflada pelo laço síncrono da simulação (starvation do event
+    // loop lida como se fosse rede). `null` sinaliza "não aplicável".
+    it("should skip the latency check entirely when latency is not applicable (null)", () => {
+        const stateManager = new LocalStateManager();
+        const volMonitor = new VolatilityMonitor(stateManager);
+        const liqMonitor = new LiquidityMonitor(stateManager);
+
+        volMonitor.shouldPause = () => false;
+        liqMonitor.shouldPause = () => false;
+
+        const cb = new CircuitBreaker(volMonitor, liqMonitor, () => null);
+        expect(cb.shouldPause(pair)).toBeFalse();
+    });
+
+    it("should still honour the other monitors when latency is not applicable", () => {
+        const stateManager = new LocalStateManager();
+        const volMonitor = new VolatilityMonitor(stateManager);
+        const liqMonitor = new LiquidityMonitor(stateManager);
+
+        volMonitor.shouldPause = () => true;
+        liqMonitor.shouldPause = () => false;
+
+        const cb = new CircuitBreaker(volMonitor, liqMonitor, () => null);
+        expect(cb.shouldPause(pair)).toBeTrue();
+    });
+
+    it("should treat zero latency as a real measurement, not as absent", () => {
+        const stateManager = new LocalStateManager();
+        const volMonitor = new VolatilityMonitor(stateManager);
+        const liqMonitor = new LiquidityMonitor(stateManager);
+
+        volMonitor.shouldPause = () => false;
+        liqMonitor.shouldPause = () => false;
+
+        // 0 é falsy: uma checagem por truthiness trataria isso como "sem medida".
+        const cb = new CircuitBreaker(volMonitor, liqMonitor, () => 0);
+        expect(cb.shouldPause(pair)).toBeFalse();
     });
 });

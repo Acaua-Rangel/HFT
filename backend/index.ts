@@ -58,6 +58,10 @@ const balanceFetcher = new BinanceBalanceFetcher(globalWsClient);
 const precisionFetcher = new BinancePrecisionFetcher();
 
 let currentLatency = 0;
+// Verdadeiro enquanto o laço do backtest está iterando. Esse laço é síncrono e só cede o
+// event loop a cada 1000 ticks, então qualquer medição de latência feita durante ele mede
+// starvation, não rede.
+let isBacktestRunning = false;
 const binanceExecutor = new BinanceOrderExecutor(globalWsClient, errorRepo, transactionRepo, precisionFetcher, stateManager);
 const simExecutor = new SimulationOrderExecutor(errorRepo, transactionRepo, precisionFetcher, stateManager);
 const simBalanceFetcher = new SimulationBalanceFetcher(simExecutor);
@@ -65,7 +69,13 @@ const simBalanceFetcher = new SimulationBalanceFetcher(simExecutor);
 const volatilityMonitor = new VolatilityMonitor(stateManager);
 const liquidityMonitor = new LiquidityMonitor(stateManager);
 
-const circuitBreaker = new CircuitBreaker(volatilityMonitor, liquidityMonitor, () => currentLatency);
+// A trava de latência só se aplica quando há ordem real viajando até a exchange. Em
+// BACKTEST não há, e a medida ainda por cima fica inflada pelo laço síncrono do backtest.
+const circuitBreaker = new CircuitBreaker(
+    volatilityMonitor,
+    liquidityMonitor,
+    () => (currentMode === "LIVE" && !isBacktestRunning) ? currentLatency : null
+);
 const inventoryManager = new InventoryManager();
 
 const tradeIntensityMonitor = new TradeIntensityMonitor(ingestor);
@@ -157,6 +167,9 @@ async function startHftEngine() {
     // Balance update loop — reads from the appropriate source based on mode
     // Dedicated latency monitor (real ping to Binance API)
     setInterval(async () => {
+        // Medir durante o backtest só produziria lixo: o laço bloqueia o event loop entre
+        // os yields, então o tempo observado do ping é starvation somada à rede.
+        if (isBacktestRunning) return;
         try {
             if (globalWsClient.isReady()) {
                 currentLatency = await globalWsClient.ping();
@@ -435,7 +448,9 @@ setInterval(() => {
         gamma: inventoryManager.GAMMA,
         baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
         maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
-        latency: currentLatency,
+        // null durante o backtest: a medida ficaria inflada pela starvation do event loop,
+        // e o dashboard trata null como "--ms" em vez de exibir um valor falso.
+        latency: isBacktestRunning ? null : currentLatency,
         totalFees: simExecutor.totalFeesCollected,
         effectiveSpread: quotes.effectiveSpread,
         minSpreadFloor: quotes.minSpreadFloor,
@@ -497,79 +512,87 @@ async function executeBacktest(startTime: number, endTime: number, initialBalanc
     }
     
     server.publish("dashboard", JSON.stringify({ type: "BACKTEST_STATUS", status: "RUNNING" }));
-    const histIngestor = new HistoricalPriceIngestor();
-    // Book sintético calibrado com a precisão real do símbolo, em vez do spread fixo de
-    // 0,01% que era ~645× mais largo que o book verdadeiro do BTCFDUSD.
-    let btSymbolForBook = "";
-    mmPair.applyBinanceSymbol(s => btSymbolForBook = s);
-    histIngestor.configureBook({
-        tickSize: precisionFetcher.getPriceTickSize(btSymbolForBook),
-        levelDepthQuote: simExecutor.queueAheadQuote,
-    });
-    histIngestor.subscribe(mmPair);
+    isBacktestRunning = true;
+    try {
+        const histIngestor = new HistoricalPriceIngestor();
+        // Book sintético calibrado com a precisão real do símbolo, em vez do spread fixo de
+        // 0,01% que era ~645× mais largo que o book verdadeiro do BTCFDUSD.
+        let btSymbolForBook = "";
+        mmPair.applyBinanceSymbol(s => btSymbolForBook = s);
+        histIngestor.configureBook({
+            tickSize: precisionFetcher.getPriceTickSize(btSymbolForBook),
+            levelDepthQuote: simExecutor.queueAheadQuote,
+        });
+        histIngestor.subscribe(mmPair);
     
-    histIngestor.onTick((tick) => {
-        stateManager.updateState(tick);
-    });
+        histIngestor.onTick((tick) => {
+            stateManager.updateState(tick);
+        });
 
-    let lastMMLoop = 0;
+        let lastMMLoop = 0;
 
-    for (let i = 0; i < ticks.length; i++) {
-        const rawTick = ticks[i];
-        histIngestor.emitHistoricalTick(rawTick);
+        for (let i = 0; i < ticks.length; i++) {
+            const rawTick = ticks[i];
+            histIngestor.emitHistoricalTick(rawTick);
         
-        inventoryManager.baseBalance = simExecutor.baseBalance;
-        inventoryManager.quoteBalance = simExecutor.quoteBalance;
+            inventoryManager.baseBalance = simExecutor.baseBalance;
+            inventoryManager.quoteBalance = simExecutor.quoteBalance;
 
-        // Evaluate simulation fills on every historical tick
-        const book = stateManager.retrieveOrderBook(mmPair);
-        let bestBid = 0;
-        let bestAsk = 0;
-        if (book) {
-            const tickObj = book.getLatest();
-            if (tickObj) {
-                tickObj.applyTopBid((l) => { if (l) l.price.apply(v => bestBid = v); });
-                tickObj.applyTopAsk((l) => { if (l) l.price.apply(v => bestAsk = v); });
-                simExecutor.evaluateFills(bestBid, bestAsk, rawTick.volume, rawTick.low, rawTick.high);
+            // Evaluate simulation fills on every historical tick
+            const book = stateManager.retrieveOrderBook(mmPair);
+            let bestBid = 0;
+            let bestAsk = 0;
+            if (book) {
+                const tickObj = book.getLatest();
+                if (tickObj) {
+                    tickObj.applyTopBid((l) => { if (l) l.price.apply(v => bestBid = v); });
+                    tickObj.applyTopAsk((l) => { if (l) l.price.apply(v => bestAsk = v); });
+                    simExecutor.evaluateFills(bestBid, bestAsk, rawTick.volume, rawTick.low, rawTick.high);
+                }
+            }
+
+            // Run MM loop every 2s of virtual time
+            if (TimeProvider.now() - lastMMLoop >= 2000) {
+                const feeRate = currentMakerFee;
+                const isZeroFeePromo = feeRate === 0;
+                volatilityMonitor.record(mmPair);
+                const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
+                const currentK = tradeIntensityMonitor.getK(mmPair);
+
+                let btSymbol = "";
+                mmPair.applyBinanceSymbol(s => btSymbol = s);
+                const minNotional = precisionFetcher.getMinNotional(btSymbol);
+
+                await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK, minNotional);
+                lastMMLoop = TimeProvider.now();
+            }
+        
+            if (i % 1000 === 0) {
+                await new Promise(r => setImmediate(r));
+                server.publish("dashboard", JSON.stringify({
+                    type: "BACKTEST_PROGRESS",
+                    progress: (i / ticks.length) * 100,
+                    virtualTime: TimeProvider.now(),
+                    baseBalance: simExecutor.baseBalance,
+                    quoteBalance: simExecutor.quoteBalance,
+                }));
             }
         }
-
-        // Run MM loop every 2s of virtual time
-        if (TimeProvider.now() - lastMMLoop >= 2000) {
-            const feeRate = currentMakerFee;
-            const isZeroFeePromo = feeRate === 0;
-            volatilityMonitor.record(mmPair);
-            const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
-            const currentK = tradeIntensityMonitor.getK(mmPair);
-
-            let btSymbol = "";
-            mmPair.applyBinanceSymbol(s => btSymbol = s);
-            const minNotional = precisionFetcher.getMinNotional(btSymbol);
-
-            await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK, minNotional);
-            lastMMLoop = TimeProvider.now();
-        }
-        
-        if (i % 1000 === 0) {
-            await new Promise(r => setImmediate(r));
-            server.publish("dashboard", JSON.stringify({
-                type: "BACKTEST_PROGRESS",
-                progress: (i / ticks.length) * 100,
-                virtualTime: TimeProvider.now(),
-                baseBalance: simExecutor.baseBalance,
-                quoteBalance: simExecutor.quoteBalance,
-            }));
-        }
+    
+        TimeProvider.clearVirtualTime();
+        server.publish("dashboard", JSON.stringify({ 
+            type: "BACKTEST_STATUS", 
+            status: "COMPLETED",
+            finalBase: simExecutor.baseBalance,
+            finalQuote: simExecutor.quoteBalance,
+            totalFees: simExecutor.totalFeesCollected
+        }));
+    
+        console.log(`✅ Backtest completed! Final Quote: ${simExecutor.quoteBalance}`);
+    } finally {
+        // Precisa ser liberado mesmo se o laço lançar: preso em true, ele
+        // desativaria a trava de latência no modo LIVE, que é justamente onde ela protege.
+        isBacktestRunning = false;
+        TimeProvider.clearVirtualTime();
     }
-    
-    TimeProvider.clearVirtualTime();
-    server.publish("dashboard", JSON.stringify({ 
-        type: "BACKTEST_STATUS", 
-        status: "COMPLETED",
-        finalBase: simExecutor.baseBalance,
-        finalQuote: simExecutor.quoteBalance,
-        totalFees: simExecutor.totalFeesCollected
-    }));
-    
-    console.log(`✅ Backtest completed! Final Quote: ${simExecutor.quoteBalance}`);
 }

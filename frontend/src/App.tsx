@@ -727,9 +727,12 @@ function App() {
           </div>
 
           <div className="glass-panel metric-card">
-            <div className="panel-title">Network Latency (NY4)</div>
+            <div className="panel-title" style={{ display: 'flex', alignItems: 'center' }}>
+              Network Latency
+              <InfoTooltip text="RTT até a Binance. Só é medida e só trava o motor em modo LIVE: no backtest nenhuma ordem viaja até a exchange, e a medição ficaria inflada pelo laço síncrono da simulação." />
+            </div>
             <div className="metric-value" style={{ color: latency !== null && latency < 10 ? 'var(--color-up)' : '#eab308' }}>
-              {latency !== null ? `${latency}ms` : '--ms'}
+              {latency !== null ? `${latency}ms` : (tradingMode === 'BACKTEST' ? <span style={{ fontSize: '13px', color: '#94a3b8' }}>n/a (backtest)</span> : '--ms')}
             </div>
           </div>
           <div className="glass-panel metric-card">
