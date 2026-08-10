@@ -2,7 +2,7 @@ import { LocalStateManager } from "../LocalStateManager";
 
 export class RiskManager {
     private highWaterMark: number = 0;
-    private readonly MAX_DRAWDOWN_PCT = 0.02; // 2% kill switch
+    public MAX_DRAWDOWN_PCT: number = 0.02; // 2% kill switch
 
     public isKillSwitchEngaged: boolean = false;
 

@@ -702,12 +702,12 @@ function App() {
             </div>
           </div>
           
-          <div className="glass-panel metric-card" style={{ borderRight: telemetry?.hangingOrdersCount > 0 ? '4px solid #f59e0b' : 'none' }}>
+          <div className="glass-panel metric-card" style={{ borderRight: (telemetry?.hangingOrdersCount ?? 0) > 0 ? '4px solid #f59e0b' : 'none' }}>
             <div className="panel-title">Hanging Orders (Ping-Pong)</div>
             <div className="metric-value" style={{ fontSize: '14px', lineHeight: '1.4' }}>
                {telemetry?.hangingOrdersCount !== undefined ? (
                  <div style={{ display: 'flex', flexDirection: 'column' }}>
-                   <span style={{ fontSize: '20px', fontWeight: 'bold', color: telemetry.hangingOrdersCount > 0 ? '#f59e0b' : '#94a3b8' }}>
+                   <span style={{ fontSize: '20px', fontWeight: 'bold', color: (telemetry.hangingOrdersCount ?? 0) > 0 ? '#f59e0b' : '#94a3b8' }}>
                      {telemetry.hangingOrdersCount} Orders
                    </span>
                    <span style={{ color: '#94a3b8', fontSize: '12px' }}>

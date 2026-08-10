@@ -122,12 +122,12 @@ export class InventoryManager {
         let askDistanceAbs = 0;
 
         if (bestBid > 0 && bids.length > 0) {
-            bidDistancePct = (bestBid - bids[0].price) / bestBid * 100;
-            bidDistanceAbs = bestBid - bids[0].price;
+            bidDistancePct = (bestBid - bids[0]!.price) / bestBid * 100;
+            bidDistanceAbs = bestBid - bids[0]!.price;
         }
         if (bestAsk > 0 && asks.length > 0) {
-            askDistancePct = (asks[0].price - bestAsk) / bestAsk * 100;
-            askDistanceAbs = asks[0].price - bestAsk;
+            askDistancePct = (asks[0]!.price - bestAsk) / bestAsk * 100;
+            askDistanceAbs = asks[0]!.price - bestAsk;
         }
 
         return { bids, asks, bidEnabled, askEnabled, q, reservationPrice, effectiveSpread, minSpreadFloor, bidDistancePct, askDistancePct, bidDistanceAbs, askDistanceAbs };

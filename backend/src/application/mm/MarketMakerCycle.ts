@@ -161,17 +161,17 @@ export class MarketMakerCycle {
 
         // Enforce Post-Only limits for the tightest level (Level 0)
         // If the tightest level crosses, we adjust all levels relative to it
-        if (bids.length > 0 && bestAsk > 0 && bids[0].price >= bestAsk) {
-            const shift = bids[0].price - (bestAsk * 0.99999);
+        if (bids.length > 0 && bestAsk > 0 && bids[0]!.price >= bestAsk) {
+            const shift = bids[0]!.price - (bestAsk * 0.99999);
             bids.forEach(b => b.price -= shift);
         }
-        if (asks.length > 0 && bestBid > 0 && asks[0].price <= bestBid) {
-            const shift = (bestAsk * 1.00001) - asks[0].price; // Wait, this should be bestBid * 1.00001
+        if (asks.length > 0 && bestBid > 0 && asks[0]!.price <= bestBid) {
+            const shift = (bestAsk * 1.00001) - asks[0]!.price; // Wait, this should be bestBid * 1.00001
             // Let's fix this inline below: asks.forEach(a => a.price += shift);
         }
 
-        if (asks.length > 0 && bestBid > 0 && asks[0].price <= bestBid) {
-            const shift = (bestBid * 1.00001) - asks[0].price;
+        if (asks.length > 0 && bestBid > 0 && asks[0]!.price <= bestBid) {
+            const shift = (bestBid * 1.00001) - asks[0]!.price;
             asks.forEach(a => a.price += shift);
         }
 
@@ -195,16 +195,16 @@ export class MarketMakerCycle {
         const promises: Promise<void>[] = [];
 
         for (let i = 0; i < this.inventoryManager.ORDER_LEVELS; i++) {
-            const targetBid = bids[i].price;
-            const targetAsk = asks[i].price;
-            const buyLevelQuote = buyLotQuote * bids[i].amountFactor;
-            const sellLevelBase = (sellLotQuote * asks[i].amountFactor) / midPrice;
+            const targetBid = bids[i]!.price;
+            const targetAsk = asks[i]!.price;
+            const buyLevelQuote = buyLotQuote * bids[i]!.amountFactor;
+            const sellLevelBase = (sellLotQuote * asks[i]!.amountFactor) / midPrice;
 
             // Active Order Tracking & Cancellation per level
-            const buyCleared = await this.checkAndCancelOrder(this.activeBuyOrders[i], targetBid);
+            const buyCleared = await this.checkAndCancelOrder(this.activeBuyOrders[i] ?? null, targetBid);
             if (buyCleared) this.activeBuyOrders[i] = null;
             
-            const sellCleared = await this.checkAndCancelOrder(this.activeSellOrders[i], targetAsk);
+            const sellCleared = await this.checkAndCancelOrder(this.activeSellOrders[i] ?? null, targetAsk);
             if (sellCleared) this.activeSellOrders[i] = null;
             
             // Place new orders if empty
