@@ -16,6 +16,7 @@ import { BinanceHistoricalDownloader } from "./src/infrastructure/BinanceHistori
 import { HistoricalPriceIngestor } from "./src/infrastructure/HistoricalPriceIngestor";
 // Market Making components
 import { VolatilityMonitor } from "./src/application/mm/VolatilityMonitor";
+import { TrendMonitor } from "./src/application/mm/TrendMonitor";
 import { LiquidityMonitor } from "./src/application/mm/LiquidityMonitor";
 import { CircuitBreaker } from "./src/application/mm/CircuitBreaker";
 import { InventoryManager } from "./src/application/mm/InventoryManager";
@@ -67,6 +68,7 @@ const simExecutor = new SimulationOrderExecutor(errorRepo, transactionRepo, prec
 const simBalanceFetcher = new SimulationBalanceFetcher(simExecutor);
 
 const volatilityMonitor = new VolatilityMonitor(stateManager);
+const trendMonitor = new TrendMonitor(stateManager);
 const liquidityMonitor = new LiquidityMonitor(stateManager);
 
 // A trava de latência só se aplica quando há ordem real viajando até a exchange. Em
@@ -236,6 +238,10 @@ async function startHftEngine() {
                 volatilityMonitor.record(mmPair);
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
 
+                // Mesmo contrato do VolatilityMonitor: coleta uma vez por ciclo, getter puro.
+                trendMonitor.record(mmPair);
+                const trendSignal = trendMonitor.getTrendSignal(mmPair);
+
                 // Fetch current midPrice
                 let midPrice = 0;
                 const book = stateManager.retrieveOrderBook(mmPair);
@@ -246,24 +252,35 @@ async function startHftEngine() {
                     }
                 }
                 
-                // --- Risk Manager (Kill Switch) ---
-                const totalWealth = (inventoryManager.baseBalance * midPrice) + inventoryManager.quoteBalance;
-                if (riskManager.checkGlobalStopLoss(totalWealth)) {
-                    // Halt completely
-                    isEngineRunning = false;
-                    console.error("🛑 ENGINE HALTED BY GLOBAL STOP LOSS.");
-                    // Force cancel all active
-                    await mmCycle.cancelAllActiveOrders();
-                    return;
-                }
-                
-                const currentK = tradeIntensityMonitor.getK(mmPair);
-
                 let loopSymbol = "";
                 mmPair.applyBinanceSymbol(s => loopSymbol = s);
                 const minNotional = precisionFetcher.getMinNotional(loopSymbol);
 
-                await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK, minNotional);
+                // --- Risk Manager (Kill Switch) ---
+                const totalWealth = (inventoryManager.baseBalance * midPrice) + inventoryManager.quoteBalance;
+                if (riskManager.checkGlobalStopLoss(totalWealth)) {
+                    isEngineRunning = false;
+                    console.error("🛑 ENGINE HALTED BY GLOBAL STOP LOSS.");
+
+                    // Liquidar ANTES de parar. A versão anterior apenas cancelava as ordens
+                    // e desligava o motor, deixando o estoque de BTC exposto e sem ninguém
+                    // gerindo — o "stop loss" congelava a perda em vez de realizá-la, e a
+                    // posição seguia andando com o mercado até intervenção manual.
+                    //
+                    // O alvo aqui é ZERO, não o INVENTORY_TARGET_BASE_PCT: se o motor vai
+                    // desligar, o estado seguro é 100% em stablecoin. Manter 25% de BTC
+                    // "no alvo" só faz sentido enquanto alguém está cotando em torno dele.
+                    await mmCycle.flattenInventory(mmPair, midPrice, minNotional, 0);
+                    await mmCycle.cancelAllActiveOrders();
+                    return;
+                }
+
+                const currentK = tradeIntensityMonitor.getK(mmPair);
+
+                await mmCycle.executeTick(
+                    mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK, minNotional,
+                    trendSignal, trendMonitor.TREND_THRESHOLD, trendMonitor.TREND_FLATTEN_THRESHOLD
+                );
             } catch (err) {
                 console.error("MM Loop Error:", err);
             }
@@ -319,6 +336,10 @@ const server = Bun.serve({
                     safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
                     baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
                     maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
+                    inventoryTargetBasePct: inventoryManager.INVENTORY_TARGET_BASE_PCT,
+                    trendThreshold: trendMonitor.TREND_THRESHOLD,
+                    trendFlattenThreshold: trendMonitor.TREND_FLATTEN_THRESHOLD,
+                    trendFlattenEnabled: mmCycle.TREND_FLATTEN_ENABLED,
                     errors: latestErrors,
                     lotMode: mmCycle.lotConfig.mode,
                     lotValue: mmCycle.lotConfig.value
@@ -340,6 +361,10 @@ const server = Bun.serve({
                     safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
                     baseSpreadPct: inventoryManager.BASE_SPREAD_PCT,
                     maxInventorySkew: inventoryManager.MAX_INVENTORY_SKEW,
+                    inventoryTargetBasePct: inventoryManager.INVENTORY_TARGET_BASE_PCT,
+                    trendThreshold: trendMonitor.TREND_THRESHOLD,
+                    trendFlattenThreshold: trendMonitor.TREND_FLATTEN_THRESHOLD,
+                    trendFlattenEnabled: mmCycle.TREND_FLATTEN_ENABLED,
                     errors: latestErrors,
                     lotMode: mmCycle.lotConfig.mode,
                     lotValue: mmCycle.lotConfig.value
@@ -349,7 +374,16 @@ const server = Bun.serve({
                 if (data.safetyMultiplier !== undefined) inventoryManager.SAFETY_MULTIPLIER = data.safetyMultiplier;
                 if (data.baseSpreadPct !== undefined) inventoryManager.BASE_SPREAD_PCT = data.baseSpreadPct;
                 if (data.maxInventorySkew !== undefined) inventoryManager.MAX_INVENTORY_SKEW = data.maxInventorySkew;
-                console.log(`🔧 Updated MM Params: Gamma=${inventoryManager.GAMMA}, Spread=${inventoryManager.BASE_SPREAD_PCT}, MaxSkew=${inventoryManager.MAX_INVENTORY_SKEW}`);
+                if (data.inventoryTargetBasePct !== undefined) inventoryManager.INVENTORY_TARGET_BASE_PCT = data.inventoryTargetBasePct;
+                if (data.trendThreshold !== undefined) trendMonitor.TREND_THRESHOLD = data.trendThreshold;
+                if (data.trendFlattenThreshold !== undefined) trendMonitor.TREND_FLATTEN_THRESHOLD = data.trendFlattenThreshold;
+                // Liquidação automática por tendência é taker: só ligar depois de confirmar
+                // a comissão realizada de taker com scripts/binance-audit.ts.
+                if (data.trendFlattenEnabled !== undefined) {
+                    mmCycle.TREND_FLATTEN_ENABLED = !!data.trendFlattenEnabled;
+                    console.log(`⚠️ Trend auto-flatten (TAKER) ${mmCycle.TREND_FLATTEN_ENABLED ? "ATIVADO" : "desativado"}.`);
+                }
+                console.log(`🔧 Updated MM Params: Gamma=${inventoryManager.GAMMA}, Spread=${inventoryManager.BASE_SPREAD_PCT}, MaxSkew=${inventoryManager.MAX_INVENTORY_SKEW}, Target=${inventoryManager.INVENTORY_TARGET_BASE_PCT}`);
             } else if (data.type === "UPDATE_RISK_PARAMS") {
                 if (data.maxDrawdownPct !== undefined) {
                     (riskManager as any).MAX_DRAWDOWN_PCT = data.maxDrawdownPct;
@@ -402,7 +436,12 @@ setInterval(() => {
     tick.applyTopBid((level) => { if (level) level.price.apply(v => bestBid = v); });
     tick.applyTopAsk((level) => { if (level) level.price.apply(v => bestAsk = v); });
 
-    const quotes = inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFeePromo, bestBid, bestAsk, tradeIntensityMonitor.getK(mmPair));
+    // Telemetria só lê; a coleta acontece no ciclo de market making.
+    const trendSignal = trendMonitor.getTrendSignal(mmPair);
+    const quotes = inventoryManager.getQuotes(
+        midPrice, feeRate, volatilityPct, isZeroFeePromo, bestBid, bestAsk,
+        tradeIntensityMonitor.getK(mmPair), trendSignal, trendMonitor.TREND_THRESHOLD
+    );
     
     // Calculate total value of hanging orders
     const allHangingOrders = [...mmCycle.hangingBuyOrders, ...mmCycle.hangingSellOrders];
@@ -472,6 +511,15 @@ setInterval(() => {
         absoluteMinSpread: inventoryManager.ABSOLUTE_MIN_SPREAD,
         intensityK: tradeIntensityMonitor.getK(mmPair),
         killSwitchEngaged: riskManager.isKillSwitchEngaged,
+        // Defesa de estoque: o dashboard precisa mostrar POR QUE um lado parou, senão um
+        // veto de tendência é indistinguível de saldo insuficiente.
+        inventoryTargetBasePct: inventoryManager.INVENTORY_TARGET_BASE_PCT,
+        trendSignal,
+        trendThreshold: trendMonitor.TREND_THRESHOLD,
+        trendFlattenThreshold: trendMonitor.TREND_FLATTEN_THRESHOLD,
+        trendFlattenEnabled: mmCycle.TREND_FLATTEN_ENABLED,
+        bidVeto: quotes.bidVeto,
+        askVeto: quotes.askVeto,
         hangingOrdersValue: hangingOrdersValue,
         hangingOrdersCount: allHangingOrders.length,
         activeBuyCount,
@@ -557,13 +605,18 @@ async function executeBacktest(startTime: number, endTime: number, initialBalanc
                 const isZeroFeePromo = feeRate === 0;
                 volatilityMonitor.record(mmPair);
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
+                trendMonitor.record(mmPair);
+                const trendSignal = trendMonitor.getTrendSignal(mmPair);
                 const currentK = tradeIntensityMonitor.getK(mmPair);
 
                 let btSymbol = "";
                 mmPair.applyBinanceSymbol(s => btSymbol = s);
                 const minNotional = precisionFetcher.getMinNotional(btSymbol);
 
-                await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK, minNotional);
+                await mmCycle.executeTick(
+                    mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK, minNotional,
+                    trendSignal, trendMonitor.TREND_THRESHOLD, trendMonitor.TREND_FLATTEN_THRESHOLD
+                );
                 lastMMLoop = TimeProvider.now();
             }
         

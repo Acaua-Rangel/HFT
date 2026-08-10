@@ -14,9 +14,13 @@ describe("InventoryManager", () => {
 
     it("should generate symmetric quotes when inventory is perfectly balanced", () => {
         const im = new InventoryManager();
-        im.baseBalance = 0.5;
-        im.quoteBalance = 50; 
-        
+        // "Balanceado" significa em cima do ALVO, que não é mais 50/50 — o alvo caiu para
+        // limitar exposição direcional num bot spot sem hedge. Derivar dele em vez de
+        // fixar 0.5 mantém o teste medindo o mecanismo, não o valor do parâmetro.
+        const target = im.INVENTORY_TARGET_BASE_PCT;
+        im.baseBalance = target;          // × midPrice 100 = target × 100 em valor
+        im.quoteBalance = 100 * (1 - target);
+
         const quotes = im.getQuotes(100);
         expect(quotes.q).toBe(0);
         expect(quotes.bidEnabled).toBeTrue();
@@ -87,8 +91,9 @@ describe("InventoryManager", () => {
 
     it("should be neutral when inventory sits exactly on target", () => {
         const im = new InventoryManager();
-        im.baseBalance = 0.5;
-        im.quoteBalance = 50;
+        const target = im.INVENTORY_TARGET_BASE_PCT;
+        im.baseBalance = target;
+        im.quoteBalance = 100 * (1 - target);
 
         const { bidRatio, askRatio } = im.getInventorySkewRatios(100, 10);
 
@@ -140,11 +145,85 @@ describe("InventoryManager", () => {
     it("should adjust effective spread based on fee and volatility", () => {
         const im = new InventoryManager();
         im.baseBalance = 0.5;
-        im.quoteBalance = 50; 
-        
-        const normalQuotes = im.getQuotes(100, 0.001, 0.001); 
-        const highVolQuotes = im.getQuotes(100, 0.001, 0.005); 
-        
+        im.quoteBalance = 50;
+
+        const normalQuotes = im.getQuotes(100, 0.001, 0.001);
+        const highVolQuotes = im.getQuotes(100, 0.001, 0.005);
+
         expect(highVolQuotes.effectiveSpread).toBeGreaterThan(normalQuotes.effectiveSpread);
+    });
+
+    describe("veto de tendência", () => {
+        /** Estoque em cima do alvo, para isolar o efeito da tendência do efeito do skew. */
+        function onTarget(): InventoryManager {
+            const im = new InventoryManager();
+            im.baseBalance = im.INVENTORY_TARGET_BASE_PCT;
+            im.quoteBalance = 100 * (1 - im.INVENTORY_TARGET_BASE_PCT);
+            return im;
+        }
+
+        it("disables the bid on a confirmed downtrend", () => {
+            const im = onTarget();
+            const q = im.getQuotes(100, 0, 0, true, 0, 0, 1.5, -0.01, 0.004);
+
+            expect(q.bidEnabled).toBeFalse();
+            expect(q.bidVeto).toBe("TREND");
+        });
+
+        it("keeps quoting the bid when the drop is below the threshold", () => {
+            const im = onTarget();
+            const q = im.getQuotes(100, 0, 0, true, 0, 0, 1.5, -0.001, 0.004);
+
+            expect(q.bidEnabled).toBeTrue();
+            expect(q.bidVeto).toBeNull();
+        });
+
+        /**
+         * Trava de projeto: o veto é DELIBERADAMENTE assimétrico. A simetria é a escolha
+         * óbvia e está errada aqui — o risco estrutural do bot é estar comprado, e vetar a
+         * venda numa alta amplifica exatamente o modo de falha que o mecanismo existe para
+         * conter. Se alguém "consertar" a assimetria, este teste quebra.
+         */
+        it("NEVER disables the ask on an uptrend, however strong", () => {
+            const im = onTarget();
+            const q = im.getQuotes(100, 0, 0, true, 0, 0, 1.5, 0.05, 0.004);
+
+            expect(q.askEnabled).toBeTrue();
+            expect(q.askVeto).toBeNull();
+        });
+
+        it("reports INVENTORY_SKEW rather than TREND when both would fire", () => {
+            const im = new InventoryManager();
+            im.baseBalance = 100;  // comprado muito além do limite
+            im.quoteBalance = 1;
+
+            const q = im.getQuotes(100, 0, 0, true, 0, 0, 1.5, -0.01, 0.004);
+
+            // O estoque é a causa mais grave e mais acionável; a tendência é passageira.
+            expect(q.bidEnabled).toBeFalse();
+            expect(q.bidVeto).toBe("INVENTORY_SKEW");
+        });
+
+        it("reports NO_WEALTH on both sides when there is nothing to trade", () => {
+            const im = new InventoryManager();
+            im.baseBalance = 0;
+            im.quoteBalance = 0;
+
+            const q = im.getQuotes(100);
+
+            expect(q.bidVeto).toBe("NO_WEALTH");
+            expect(q.askVeto).toBe("NO_WEALTH");
+        });
+
+        it("leaves the reservation price untouched by the trend", () => {
+            const im = onTarget();
+            // O skew de preço foi removido de propósito (deslocava ~1e-4%, ou seja nada).
+            // Tendência atua na alavanca liga/desliga, nunca no preço.
+            const down = im.getQuotes(100, 0, 0, true, 0, 0, 1.5, -0.05, 0.004);
+            const up = im.getQuotes(100, 0, 0, true, 0, 0, 1.5, 0.05, 0.004);
+
+            expect(down.reservationPrice).toBe(100);
+            expect(up.reservationPrice).toBe(100);
+        });
     });
 });

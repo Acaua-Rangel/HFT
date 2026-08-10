@@ -5,9 +5,31 @@ export interface InventorySkewRatios {
     askRatio: number;
 }
 
+/**
+ * Por que um lado parou de cotar. `null` = está cotando.
+ *
+ * Existe para a invariante "nenhum lado morre em silêncio": antes, `bidEnabled = false`
+ * chegava no MarketMakerCycle sem nenhuma pista da causa, e um lado desligado por estoque
+ * era indistinguível de um desligado por saldo. Estoque derivando em silêncio foi o que
+ * produziu "pico short = 0" na auditoria.
+ */
+export type QuoteVeto = "NO_WEALTH" | "INVENTORY_SKEW" | "TREND" | null;
+
 export class InventoryManager {
-    // Fração do patrimônio que queremos manter no ativo base. 0.5 = neutro.
-    public INVENTORY_TARGET_BASE_PCT = 0.5;
+    /**
+     * Fração do patrimônio mantida no ativo base.
+     *
+     * NÃO é 0.5 (o "neutro" do market maker de livro-texto). Este bot opera spot, sem
+     * instrumento de short: cada satoshi em estoque é exposição direcional pura, que rende
+     * apenas o spread capturado e perde o movimento inteiro do BTC quando o preço cai.
+     * 0.5 significava manter metade do patrimônio apostado na direção do BTC 24h por dia —
+     * a captura de spread de 0,05% por round-trip não paga uma queda de 2%.
+     *
+     * 0.25 é o limite de exposição direcional que aceitamos para conseguir cotar os dois
+     * lados. O número certo depende de quanto o spread realmente captura; enquanto o
+     * markout não for medido (ver auditoria), este é um teto de risco, não uma otimização.
+     */
+    public INVENTORY_TARGET_BASE_PCT = 0.25;
 
     /**
      * Largura da faixa de inventário, em múltiplos do lote, dentro da qual o skew de
@@ -16,7 +38,9 @@ export class InventoryManager {
     public INVENTORY_RANGE_MULTIPLIER = 4.0;
 
     // Pausa total de um lado quando o desvio de inventário passa disto (q em ±0.5).
-    public MAX_INVENTORY_SKEW = 0.40;
+    // 0.30 (era 0.40) — corta o lado comprador mais cedo. É o corte de risco de verdade;
+    // o piso de notional mínimo nunca deve ser usado para isso.
+    public MAX_INVENTORY_SKEW = 0.30;
 
     // Quantas vezes a volatilidade medida o spread precisa cobrir.
     public SAFETY_MULTIPLIER = 5.0;
@@ -110,11 +134,14 @@ export class InventoryManager {
         isZeroFee: boolean = false,
         bestBid: number = 0,
         bestAsk: number = 0,
-        k: number = 1.5
+        k: number = 1.5,
+        trendSignal: number = 0,
+        trendThreshold: number = 0.004
     ): {
         bids: { price: number, amountFactor: number }[],
         asks: { price: number, amountFactor: number }[],
         bidEnabled: boolean, askEnabled: boolean,
+        bidVeto: QuoteVeto, askVeto: QuoteVeto,
         q: number, reservationPrice: number, effectiveSpread: number, minSpreadFloor: number,
         bidDistancePct: number, askDistancePct: number, bidDistanceAbs: number, askDistanceAbs: number
     } {
@@ -122,19 +149,37 @@ export class InventoryManager {
         const totalWealth = baseWealth + this.quoteBalance;
 
         let q = 0;
-        let bidEnabled = true;
-        let askEnabled = true;
+        let bidVeto: QuoteVeto = null;
+        let askVeto: QuoteVeto = null;
 
         if (totalWealth <= 0) {
-            bidEnabled = false;
-            askEnabled = false;
+            bidVeto = "NO_WEALTH";
+            askVeto = "NO_WEALTH";
         } else {
             const baseRatio = baseWealth / totalWealth;
             q = baseRatio - this.INVENTORY_TARGET_BASE_PCT;
 
-            if (q > this.MAX_INVENTORY_SKEW) bidEnabled = false;
-            if (q < -this.MAX_INVENTORY_SKEW) askEnabled = false;
+            if (q > this.MAX_INVENTORY_SKEW) bidVeto = "INVENTORY_SKEW";
+            if (q < -this.MAX_INVENTORY_SKEW) askVeto = "INVENTORY_SKEW";
         }
+
+        // Veto de tendência — segunda fonte, independente do estoque.
+        //
+        // Deliberadamente ASSIMÉTRICO: veta a compra numa queda, mas NÃO veta a venda numa
+        // alta. A simetria seria a escolha óbvia e está errada aqui. O risco estrutural
+        // deste bot é estar comprado: ele opera spot, o alvo de estoque é positivo, e o
+        // modo de falha documentado é acumular BTC e vê-lo depreciar. Qualquer mecanismo
+        // que suprima a VENDA amplifica exatamente esse modo de falha.
+        //
+        // Vender numa alta "deixa dinheiro na mesa" — e tudo bem. O trabalho de um market
+        // maker é capturar spread, não acertar direção; segurar estoque esperando a alta
+        // continuar é apostar direcional com outro nome, e é a aposta que já custou caro.
+        if (trendSignal < -trendThreshold && bidVeto === null) {
+            bidVeto = "TREND";
+        }
+
+        const bidEnabled = bidVeto === null;
+        const askEnabled = askVeto === null;
 
         // Spread de Avellaneda-Stoikov:  delta = gamma·sigma²·T + (2/gamma)·ln(1 + gamma/k)
         //
@@ -205,6 +250,6 @@ export class InventoryManager {
             askDistanceAbs = asks[0]!.price - bestAsk;
         }
 
-        return { bids, asks, bidEnabled, askEnabled, q, reservationPrice, effectiveSpread, minSpreadFloor, bidDistancePct, askDistancePct, bidDistanceAbs, askDistanceAbs };
+        return { bids, asks, bidEnabled, askEnabled, bidVeto, askVeto, q, reservationPrice, effectiveSpread, minSpreadFloor, bidDistancePct, askDistancePct, bidDistanceAbs, askDistanceAbs };
     }
 }

@@ -45,8 +45,99 @@ export class BinanceOrderExecutor implements OrderExecutor {
     return this.sendWsOrder("SELL", pair, amount, price);
   }
 
+  public async executeMarketSell(pair: Pair, baseAmount: Amount): Promise<OrderFill> {
+    return this.sendWsMarketOrder("SELL", pair, baseAmount);
+  }
+
+  public async executeMarketBuy(pair: Pair, quoteAmount: Amount): Promise<OrderFill> {
+    return this.sendWsMarketOrder("BUY", pair, quoteAmount);
+  }
+
   public canExecuteBatch(count: number): boolean {
     return this.rateLimiter.hasCapacityFor(count);
+  }
+
+  /**
+   * Ordem a mercado. Irmã de `sendWsOrder`, mas com três diferenças que importam:
+   *
+   * 1. Não há preço — a Binance casa contra o book. Por isso nada de tickSize aqui.
+   * 2. A venda manda `quantity` (base) e a compra manda `quoteOrderQty` (quote). Deixar a
+   *    compra em quote evita ter que dividir pelo preço com um preço que já mudou.
+   * 3. O retorno é o preenchimento em si, não uma ordem para rastrear. Ela não descansa
+   *    no book, então não pode entrar nos arrays de ordens ativas.
+   *
+   * Isto é taker: agride o book e paga o spread. Só deve ser chamado pelo mecanismo de
+   * defesa de estoque, nunca pelo caminho de cotação.
+   */
+  private async sendWsMarketOrder(side: "BUY" | "SELL", pair: Pair, amount: Amount): Promise<OrderFill> {
+    await this.ensureConnected();
+    if (!this.wsClient.isReady()) return OrderFill.failed();
+
+    let symbol = "";
+    pair.applyBinanceSymbol((sym) => { symbol = sym; });
+
+    let amountVal = 0;
+    amount.apply((val) => { amountVal = val; });
+    if (amountVal <= 0) return OrderFill.failed();
+
+    if (!this.rateLimiter.hasCapacityFor(1)) {
+      this.logError("RATE_LIMIT", "Not enough quota to place market order");
+      return OrderFill.failed();
+    }
+
+    const params: any = { symbol, side, type: "MARKET", newOrderRespType: "RESULT" };
+
+    if (side === "SELL") {
+      // A quantidade em base sofre o mesmo truncamento ao stepSize do caminho maker; o
+      // arredondamento para cima do notional mínimo NÃO se aplica aqui, porque estamos
+      // liquidando um saldo existente — subir a quantidade acima do que temos garante
+      // rejeição por saldo insuficiente. Se o truncamento derrubar abaixo do mínimo, a
+      // posição é poeira e a ordem simplesmente não vale a pena.
+      const quantityDecimals = this.precisionFetcher.getQuantityDecimals(symbol);
+      const factor = Math.pow(10, quantityDecimals);
+      const truncatedQty = Math.floor(amountVal * factor) / factor;
+      if (truncatedQty <= 0) {
+        this.logError("MARKET_ORDER_TRUNCATED_TO_ZERO", `Raw qty ${amountVal} truncated to 0`);
+        return OrderFill.failed();
+      }
+      params.quantity = truncatedQty.toFixed(quantityDecimals);
+    } else {
+      // Compra em quote: a Binance aceita 2 casas para stablecoins. Truncar para baixo
+      // porque gastar mais do que temos é rejeição certa.
+      const truncatedQuote = Math.floor(amountVal * 100) / 100;
+      if (truncatedQuote <= 0) return OrderFill.failed();
+      params.quoteOrderQty = truncatedQuote.toFixed(2);
+    }
+
+    this.rateLimiter.recordUsage(1);
+    try {
+      const res: WsResponse = await this.wsClient.sendRequest("order.place", params, 5000);
+
+      if (res.status !== 200) {
+        this.logError("MARKET_ORDER_REJECTED", JSON.stringify(res.error));
+        return OrderFill.failed();
+      }
+
+      const executedQty = parseFloat(res.result?.executedQty || "0");
+      const quoteQty = parseFloat(res.result?.cummulativeQuoteQty || "0");
+      if (executedQty <= 0) {
+        this.logError("MARKET_ORDER_NO_FILL", `Order accepted but executedQty=0 for ${symbol}`);
+        return OrderFill.failed();
+      }
+
+      const averagePrice = quoteQty / executedQty;
+      const executedQtyAmt = new Amount(executedQty);
+      const quoteQtyAmt = new Amount(quoteQty);
+      const averagePriceAmt = new Amount(averagePrice);
+
+      this.logTrade(symbol, executedQtyAmt, averagePriceAmt, `MARKET_${side}`);
+      console.log(`⚡ [TAKER] ${side} ${executedQty} ${symbol} @ ${averagePrice.toFixed(2)} (${quoteQty.toFixed(2)} quote)`);
+
+      return new OrderFill(executedQtyAmt, quoteQtyAmt, averagePriceAmt, true);
+    } catch (err) {
+      this.logError("MARKET_ORDER_EXCEPTION", err instanceof Error ? err.message : String(err));
+      return OrderFill.failed();
+    }
   }
 
   private async sendWsOrder(side: "BUY" | "SELL", pair: Pair, amount: Amount, price?: Amount): Promise<ActiveOrder | null> {

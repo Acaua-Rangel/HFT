@@ -328,3 +328,92 @@ describe("SimulationOrderExecutor - minNotional enforcement", () => {
         expect(order!.qty).toBeCloseTo(0.00155, 10);
     });
 });
+
+/**
+ * Bloco separado (e NÃO pulado) para as ordens a mercado. O describe acima está em
+ * `.skip` desde antes destas mudanças; manter a cobertura nova fora dele evita que ela
+ * nasça desligada junto.
+ */
+describe("SimulationOrderExecutor — ordens a mercado", () => {
+    const pair = new Pair(new Currency("BTC"), new Currency("FDUSD"));
+
+    function make(bid: number, ask: number) {
+        const book = new OrderBook();
+        book.add(new Tick(
+            pair,
+            [{ price: new Amount(ask), qty: new Amount(10) }],
+            [{ price: new Amount(bid), qty: new Amount(10) }]
+        ));
+        const stateManager = { retrieveOrderBook: () => book } as unknown as StateManager;
+
+        const executor = new SimulationOrderExecutor(
+            new MockErrorLogRepository() as any,
+            new MockTransactionRepository() as any,
+            new MockPrecisionFetcher() as unknown as BinancePrecisionFetcher,
+            stateManager
+        );
+        return executor;
+    }
+
+    test("market sell fills immediately at the bid and moves the virtual balances", async () => {
+        const executor = make(99, 101);
+        executor.setInitialBalances(1, 0);
+
+        // Sem passar por evaluateFills: um taker consome liquidez, não espera fila.
+        const fill = await executor.executeMarketSell(pair, new Amount(0.5));
+
+        let qty = 0, price = 0, ok = false;
+        fill.apply((q, _quote, p, success) => {
+            q.apply(v => qty = v);
+            p.apply(v => price = v);
+            ok = success;
+        });
+
+        expect(ok).toBeTrue();
+        expect(qty).toBeCloseTo(0.5, 8);
+        expect(price).toBe(99);
+        expect(executor.baseBalance).toBeCloseTo(0.5, 8);
+        expect(executor.quoteBalance).toBeCloseTo(49.5, 8);
+    });
+
+    test("market buy fills at the ask", async () => {
+        const executor = make(99, 101);
+        executor.setInitialBalances(0, 202);
+
+        const fill = await executor.executeMarketBuy(pair, new Amount(101));
+
+        let price = 0;
+        fill.apply((_q, _quote, p) => { p.apply(v => price = v); });
+        expect(price).toBe(101);
+        expect(executor.baseBalance).toBeGreaterThan(0);
+    });
+
+    test("refuses to sell more base than the virtual balance holds", async () => {
+        const executor = make(99, 101);
+        executor.setInitialBalances(0.1, 0);
+
+        // Sem esta trava o simulador produziria saldo negativo e esconderia o -2010 que a
+        // Binance real devolveria.
+        const fill = await executor.executeMarketSell(pair, new Amount(5));
+
+        let ok = true;
+        fill.apply((_q, _quote, _p, success) => { ok = success; });
+        expect(ok).toBeFalse();
+        expect(executor.baseBalance).toBe(0.1);
+    });
+
+    test("fails cleanly when there is no orderbook", async () => {
+        const executor = new SimulationOrderExecutor(
+            new MockErrorLogRepository() as any,
+            new MockTransactionRepository() as any,
+            new MockPrecisionFetcher() as unknown as BinancePrecisionFetcher,
+            { retrieveOrderBook: () => null } as unknown as StateManager
+        );
+        executor.setInitialBalances(1, 0);
+
+        const fill = await executor.executeMarketSell(pair, new Amount(0.5));
+        let ok = true;
+        fill.apply((_q, _quote, _p, success) => { ok = success; });
+        expect(ok).toBeFalse();
+    });
+});

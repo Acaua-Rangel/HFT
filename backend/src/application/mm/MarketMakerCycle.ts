@@ -3,7 +3,7 @@ import { OrderExecutor, ActiveOrder } from "../../domain/interfaces/OrderExecuto
 import { Amount } from "../../domain/valueObjects/Amount";
 import { LocalStateManager } from "../LocalStateManager";
 import { CircuitBreaker } from "./CircuitBreaker";
-import { InventoryManager } from "./InventoryManager";
+import { InventoryManager, QuoteVeto } from "./InventoryManager";
 import { BinanceUserDataStream, ExecutionReport } from "../../infrastructure/BinanceUserDataStream";
 import { TimeProvider } from "../../infrastructure/TimeProvider";
 
@@ -63,6 +63,22 @@ export class MarketMakerCycle {
     // acumulam indefinidamente e seguem descontando saldo disponível.
     private readonly HANGING_MAX_AGE_MS = 600000;   // 10 minutos
     private readonly HANGING_MAX_DRIFT_PCT = 0.01;  // 1% de distância do mid
+
+    /**
+     * Liquidar estoque a mercado quando a tendência de queda passa do limiar.
+     *
+     * NASCE DESLIGADO de propósito. A ordem a mercado é taker, e o `zeroFeePromoBases` do
+     * index.ts assume taxa zero sem nunca ter verificado se a promo do BTCFDUSD vale para
+     * taker ou só para maker. Se for maker-only, cada flatten custa ~10 bps e disparar
+     * algumas vezes por dia dreni mais do que a perda que evita.
+     *
+     * Ligar só depois de medir a comissão realizada de taker com scripts/binance-audit.ts.
+     * O flatten do kill switch é outra história e continua sempre ativo: é raro,
+     * existencial, e o custo de taker é irrelevante frente a segurar a posição às cegas.
+     */
+    public TREND_FLATTEN_ENABLED = false;
+    private readonly TREND_FLATTEN_COOLDOWN_MS = 300000; // 5 min entre liquidações
+    private lastFlattenAt = 0;
 
     public currentPair: Pair | null = null;
 
@@ -140,6 +156,84 @@ export class MarketMakerCycle {
     }
 
     /**
+     * Cancela absolutamente tudo, inclusive as hanging orders.
+     *
+     * `cancelAllActiveOrders` ignora os arrays de hanging — o que basta para o refresh, mas
+     * não para liquidar: uma venda a mercado precisa do BTC livre, e BTC preso numa hanging
+     * order faz a Binance rejeitar com -2010.
+     */
+    private async cancelEverything(): Promise<void> {
+        const hanging = [...this.hangingBuyOrders, ...this.hangingSellOrders];
+        this.hangingBuyOrders = [];
+        this.hangingSellOrders = [];
+        await Promise.all([
+            this.cancelAllActiveOrders(),
+            ...hanging.map(o => this.cancelTracked(o)),
+        ]);
+    }
+
+    /**
+     * Liquida o estoque excedente a mercado até `targetBasePct` do patrimônio.
+     *
+     * Existe porque o mecanismo passivo não consegue sair de uma posição numa queda: a
+     * ordem de venda só executa se o preço subir até ela, exatamente o que não acontece
+     * quando o preço está caindo. Sem isto, o "stop loss" apenas congelava a perda —
+     * cancelava as ordens, parava o motor, e deixava o BTC exposto sem ninguém gerindo.
+     *
+     * SOMENTE VENDA, por decisão de projeto. Se estivermos ABAIXO do alvo, não faz nada:
+     * quem chama isto é o kill switch de drawdown ou a defesa de tendência de queda, e
+     * comprar BTC no exato momento em que concluímos que não entendemos o mercado seria
+     * aumentar risco sob o nome de "rebalancear". Um mecanismo de defesa só encolhe
+     * exposição.
+     *
+     * É taker: paga o spread e, se a promo de taxa zero for maker-only, paga taxa também.
+     * Deve ser raro. Ver TREND_FLATTEN_COOLDOWN_MS.
+     */
+    public async flattenInventory(
+        pair: Pair,
+        midPrice: number,
+        minNotional: number,
+        targetBasePct: number
+    ): Promise<void> {
+        if (midPrice <= 0) return;
+
+        await this.cancelEverything();
+
+        const baseValue = this.inventoryManager.baseBalance * midPrice;
+        const totalWealth = baseValue + this.inventoryManager.quoteBalance;
+        if (totalWealth <= 0) return;
+
+        const excessQuote = baseValue - (totalWealth * targetBasePct);
+        if (excessQuote < minNotional) {
+            // Ou já estamos no alvo, ou o excedente é poeira que a exchange rejeitaria.
+            return;
+        }
+
+        // Nunca pedir mais base do que temos: erro de arredondamento aqui vira -2010.
+        const qtyToSell = Math.min(excessQuote / midPrice, this.inventoryManager.baseBalance);
+        if (qtyToSell <= 0) return;
+
+        console.log(`🛟 [FLATTEN] Liquidando ${qtyToSell.toFixed(8)} base (~${(qtyToSell * midPrice).toFixed(2)} quote) para voltar a ${(targetBasePct * 100).toFixed(0)}% de estoque.`);
+
+        try {
+            const fill = await this.executor.executeMarketSell(pair, new Amount(qtyToSell));
+            fill.apply((qty, quote, avgPrice, success) => {
+                if (!success) {
+                    this.executor.logError("FLATTEN_FAILED", `Venda a mercado de ${qtyToSell} não preencheu.`);
+                    return;
+                }
+                let q = 0, qt = 0, p = 0;
+                qty.apply(v => q = v);
+                quote.apply(v => qt = v);
+                avgPrice.apply(v => p = v);
+                console.log(`✅ [FLATTEN] Vendido ${q} @ ${p.toFixed(2)} = ${qt.toFixed(2)} quote.`);
+            });
+        } catch (err) {
+            this.executor.logError("FLATTEN_EXCEPTION", err instanceof Error ? err.message : String(err));
+        }
+    }
+
+    /**
      * Expira hanging orders por idade ou por distância do preço atual. Sem isso elas só
      * saem do array quando executam — e enquanto ficam, seu notional é descontado do
      * saldo disponível, o que estrangula a cotação dos níveis principais.
@@ -179,7 +273,17 @@ export class MarketMakerCycle {
         this.hangingSellOrders = this.hangingSellOrders.filter(o => o.orderId !== report.clientOrderId && o.orderId !== report.orderId.toString());
     }
 
-    public async executeTick(pair: Pair, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false, k: number = 1.5, minNotional: number = 10): Promise<void> {
+    public async executeTick(
+        pair: Pair,
+        feeRate: number = 0.001,
+        volatilityPct: number = 0,
+        isZeroFee: boolean = false,
+        k: number = 1.5,
+        minNotional: number = 10,
+        trendSignal: number = 0,
+        trendThreshold: number = 0.004,
+        trendFlattenThreshold: number = 0.010
+    ): Promise<void> {
         this.currentPair = pair;
 
         const levels = this.inventoryManager.ORDER_LEVELS;
@@ -222,7 +326,27 @@ export class MarketMakerCycle {
         tick.applyTopBid(l => { if (l) l.price.apply(v => bestBid = v); });
         tick.applyTopAsk(l => { if (l) l.price.apply(v => bestAsk = v); });
 
-        let { bids, asks, bidEnabled, askEnabled, effectiveSpread } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk, k);
+        // Defesa de tendência: numa queda forte, o lado vendedor passivo não sai da posição
+        // (o preço se afasta das nossas asks em vez de vir até elas). A única saída é
+        // agredir o book. Acontece antes de cotar porque cotar com estoque que já decidimos
+        // liquidar só travaria o saldo de novo.
+        const nowTs = TimeProvider.now();
+        if (this.TREND_FLATTEN_ENABLED
+            && trendSignal < -trendFlattenThreshold
+            && nowTs - this.lastFlattenAt >= this.TREND_FLATTEN_COOLDOWN_MS) {
+            this.lastFlattenAt = nowTs;
+            console.log(`📉 [TREND] Queda de ${(trendSignal * 100).toFixed(3)}% na janela — liquidando excedente até o alvo.`);
+            await this.flattenInventory(pair, midPrice, minNotional, this.inventoryManager.INVENTORY_TARGET_BASE_PCT);
+        }
+
+        let { bids, asks, bidEnabled, askEnabled, bidVeto, askVeto, effectiveSpread } =
+            this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk, k, trendSignal, trendThreshold);
+
+        // Invariante: nenhum lado pode parar de cotar em silêncio. Um lado desligado por
+        // tendência é indistinguível, no dashboard, de um travado por saldo — e estoque
+        // derivando sem ninguém perceber foi o que produziu "pico short = 0" na auditoria.
+        if (bidVeto) this.logSideVeto("BUY", bidVeto, trendSignal);
+        if (askVeto) this.logSideVeto("SELL", askVeto, trendSignal);
 
         // Enforce Post-Only limits for the tightest level (Level 0)
         // If the tightest level crosses, we adjust all levels relative to it
@@ -394,6 +518,29 @@ export class MarketMakerCycle {
         if (promises.length > 0) {
             await Promise.all(promises);
         }
+    }
+
+    /**
+     * Throttle próprio, separado do `logStuck`. Se compartilhassem o contador, um lado
+     * travado por saldo silenciaria o aviso de veto por tendência do outro lado durante um
+     * minuto inteiro — que é exatamente o silêncio que a invariante proíbe.
+     */
+    private lastVetoLog: Record<string, number> = {};
+    private logSideVeto(side: "BUY" | "SELL", veto: QuoteVeto, trendSignal: number): void {
+        if (!veto) return;
+        const key = `${side}:${veto}`;
+        const now = TimeProvider.now();
+        if (now - (this.lastVetoLog[key] ?? 0) < 60000) return;
+        this.lastVetoLog[key] = now;
+
+        const detail = veto === "TREND"
+            ? ` (tendência ${(trendSignal * 100).toFixed(3)}% na janela)`
+            : "";
+        const message = `${side} SIDE OFF: ${veto}${detail}`;
+        console.log(`\n🚦 [DIAGNOSTIC] ${message}`);
+        try {
+            this.executor.logError("DIAGNOSTIC_SIDE_VETO", message);
+        } catch (err) {}
     }
 
     private lastStuckLog = 0;

@@ -176,77 +176,7 @@ export class SimulationOrderExecutor implements OrderExecutor {
             }
 
             if (filled) {
-                const filledQty = truncatedQty;
-                const filledQuote = filledQty * order.price;
-
-                let quoteSym = "";
-                let baseSym = "";
-                pair.applyCurrencies((b, q) => {
-                   b.applySymbol(s => baseSym = s.toUpperCase());
-                   q.applySymbol(s => quoteSym = s.toUpperCase());
-                });
-                
-                const isFdusd = quoteSym === "FDUSD";
-                const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
-                const isZeroFeePromo = isFdusd && zeroFeePromoBases.includes(baseSym);
-                const feeRate = isZeroFeePromo ? 0 : this.BASE_FEE_RATE;
-
-                let feeInQuote = 0;
-                let commission = 0;
-                let commissionAsset = "";
-
-                if (order.side === "BUY") {
-                    this._quoteBalance -= filledQuote;
-                    const feeBase = filledQty * feeRate;
-                    this._baseBalance += (filledQty - feeBase);
-                    feeInQuote = feeBase * order.price;
-                    commission = feeBase;
-                    commissionAsset = baseSym;
-                } else {
-                    this._baseBalance -= filledQty;
-                    const feeQuote = filledQuote * feeRate;
-                    this._quoteBalance += (filledQuote - feeQuote);
-                    feeInQuote = feeQuote;
-                    commission = feeQuote;
-                    commissionAsset = quoteSym;
-                }
-
-                this.totalFeesCollected += feeInQuote;
-
-                const executedQtyAmt = new Amount(filledQty);
-                const cummulativeQuoteQtyAmt = new Amount(filledQuote);
-                const averagePriceAmt = new Amount(order.price);
-
-                this.logTrade(order.symbol, executedQtyAmt, averagePriceAmt, "SIM_LIMIT_MAKER");
-                
-                if (this.userDataStream) {
-                    let mockOrderIdNum = 0;
-                    try {
-                        const numericPart = orderId.replace(/[^0-9]/g, '').substring(0, 8);
-                        mockOrderIdNum = numericPart ? parseInt(numericPart) : Date.now();
-                    } catch(e) { mockOrderIdNum = Date.now(); }
-
-                    const report: ExecutionReport = {
-                        symbol: order.symbol,
-                        orderId: mockOrderIdNum,
-                        clientOrderId: orderId,
-                        side: order.side,
-                        type: "LIMIT",
-                        timeInForce: "GTC",
-                        originalQty: truncatedQty,
-                        originalPrice: order.price,
-                        executionType: "TRADE",
-                        orderStatus: "FILLED",
-                        lastFilledQty: filledQty,
-                        accumulatedFilledQty: filledQty,
-                        lastFilledPrice: order.price,
-                        commissionAsset: commissionAsset,
-                        commission: commission,
-                        tradeTime: TimeProvider.now()
-                    };
-                    this.userDataStream.pushMockReport(report);
-                }
-
+                this.settleFill(pair, order.symbol, order.side, truncatedQty, order.price, orderId, "SIM_LIMIT_MAKER");
                 toDelete.push(orderId);
             }
         }
@@ -254,6 +184,154 @@ export class SimulationOrderExecutor implements OrderExecutor {
         for (const id of toDelete) {
             this.activeOrders.delete(id);
         }
+    }
+
+    /**
+     * Liquida um preenchimento: cobra a taxa, move os saldos virtuais, registra a
+     * transação e empurra o ExecutionReport mock.
+     *
+     * Extraído de `evaluateFills` para que as ordens a mercado usem exatamente a mesma
+     * contabilidade — duas cópias divergiriam na primeira mudança de regra de taxa.
+     */
+    private settleFill(
+        pair: Pair,
+        symbol: string,
+        side: "BUY" | "SELL",
+        filledQty: number,
+        price: number,
+        orderId: string,
+        status: string
+    ): OrderFill {
+        const filledQuote = filledQty * price;
+
+        let quoteSym = "";
+        let baseSym = "";
+        pair.applyCurrencies((b, q) => {
+            b.applySymbol(s => baseSym = s.toUpperCase());
+            q.applySymbol(s => quoteSym = s.toUpperCase());
+        });
+
+        // NOTA: o simulador aplica a mesma taxa para maker e taker. Na Binance real a promo
+        // de taxa zero do FDUSD pode valer só para maker — se for o caso, o custo das ordens
+        // a mercado está subestimado aqui. Medir com scripts/binance-audit.ts.
+        const isFdusd = quoteSym === "FDUSD";
+        const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
+        const isZeroFeePromo = isFdusd && zeroFeePromoBases.includes(baseSym);
+        const feeRate = isZeroFeePromo ? 0 : this.BASE_FEE_RATE;
+
+        let feeInQuote = 0;
+        let commission = 0;
+        let commissionAsset = "";
+
+        if (side === "BUY") {
+            this._quoteBalance -= filledQuote;
+            const feeBase = filledQty * feeRate;
+            this._baseBalance += (filledQty - feeBase);
+            feeInQuote = feeBase * price;
+            commission = feeBase;
+            commissionAsset = baseSym;
+        } else {
+            this._baseBalance -= filledQty;
+            const feeQuote = filledQuote * feeRate;
+            this._quoteBalance += (filledQuote - feeQuote);
+            feeInQuote = feeQuote;
+            commission = feeQuote;
+            commissionAsset = quoteSym;
+        }
+
+        this.totalFeesCollected += feeInQuote;
+
+        const executedQtyAmt = new Amount(filledQty);
+        const cummulativeQuoteQtyAmt = new Amount(filledQuote);
+        const averagePriceAmt = new Amount(price);
+
+        this.logTrade(symbol, executedQtyAmt, averagePriceAmt, status);
+
+        if (this.userDataStream) {
+            let mockOrderIdNum = 0;
+            try {
+                const numericPart = orderId.replace(/[^0-9]/g, '').substring(0, 8);
+                mockOrderIdNum = numericPart ? parseInt(numericPart) : Date.now();
+            } catch (e) { mockOrderIdNum = Date.now(); }
+
+            const report: ExecutionReport = {
+                symbol,
+                orderId: mockOrderIdNum,
+                clientOrderId: orderId,
+                side,
+                type: status.startsWith("SIM_MARKET") ? "MARKET" : "LIMIT",
+                timeInForce: "GTC",
+                originalQty: filledQty,
+                originalPrice: price,
+                executionType: "TRADE",
+                orderStatus: "FILLED",
+                lastFilledQty: filledQty,
+                accumulatedFilledQty: filledQty,
+                lastFilledPrice: price,
+                commissionAsset: commissionAsset,
+                commission: commission,
+                tradeTime: TimeProvider.now()
+            };
+            this.userDataStream.pushMockReport(report);
+        }
+
+        return new OrderFill(executedQtyAmt, cummulativeQuoteQtyAmt, averagePriceAmt, true);
+    }
+
+    /**
+     * Ordem a mercado simulada: preenche na hora, sem passar pela fila do `evaluateFills`.
+     * É o comportamento correto — um taker consome liquidez existente, não espera fila.
+     *
+     * O preço vem do topo do book do lado contrário (venda bate no bid, compra no ask).
+     * Não modelamos slippage por profundidade: com os lotes deste bot (dezenas de FDUSD)
+     * uma ordem cabe inteira no topo do BTCFDUSD. Para lotes maiores isso subestimaria o
+     * custo.
+     */
+    private simulateMarketOrder(side: "BUY" | "SELL", pair: Pair, amount: Amount): OrderFill {
+        let symbol = "";
+        pair.applyBinanceSymbol((sym) => { symbol = sym; });
+
+        let amountVal = 0;
+        amount.apply((val) => { amountVal = val; });
+        if (amountVal <= 0) return OrderFill.failed();
+
+        const book = this.stateManager.retrieveOrderBook(pair);
+        const tick = book?.getLatest();
+        if (!tick) return OrderFill.failed();
+
+        let execPrice = 0;
+        if (side === "SELL") {
+            tick.applyTopBid(l => { if (l) l.price.apply(v => execPrice = v); });
+        } else {
+            tick.applyTopAsk(l => { if (l) l.price.apply(v => execPrice = v); });
+        }
+        if (execPrice <= 0) return OrderFill.failed();
+
+        const quantityDecimals = this.precisionFetcher.getQuantityDecimals(symbol);
+        const factor = Math.pow(10, quantityDecimals);
+
+        // Compra vem em quote, venda em base — converter tudo para base antes de truncar.
+        const rawQty = side === "BUY" ? amountVal / execPrice : amountVal;
+        const filledQty = Math.floor(rawQty * factor) / factor;
+        if (filledQty <= 0) return OrderFill.failed();
+
+        // Um taker não pode gastar o que não tem: sem esta trava o simulador produziria
+        // saldo negativo e mascararia o -2010 que a Binance devolveria.
+        if (side === "SELL" && filledQty > this._baseBalance) return OrderFill.failed();
+        if (side === "BUY" && filledQty * execPrice > this._quoteBalance) return OrderFill.failed();
+
+        return this.settleFill(
+            pair, symbol, side, filledQty, execPrice,
+            crypto.randomUUID(), `SIM_MARKET_${side}`
+        );
+    }
+
+    public async executeMarketSell(pair: Pair, baseAmount: Amount): Promise<OrderFill> {
+        return this.simulateMarketOrder("SELL", pair, baseAmount);
+    }
+
+    public async executeMarketBuy(pair: Pair, quoteAmount: Amount): Promise<OrderFill> {
+        return this.simulateMarketOrder("BUY", pair, quoteAmount);
     }
 
     private async simulateOrder(side: "BUY"|"SELL", pair: Pair, amount: Amount, price: Amount | undefined): Promise<ActiveOrder | null> {

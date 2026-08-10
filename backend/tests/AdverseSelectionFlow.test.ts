@@ -38,6 +38,12 @@ describe("Adverse Selection Flow Test (Toxic Flow Protection)", () => {
             async executeMakerSell(pair: Pair, amount: Amount, price?: Amount, ttlMs?: number): Promise<OrderFill> {
                 return OrderFill.failed();
             }
+            async executeMarketSell(_pair: Pair, _baseAmount: Amount): Promise<OrderFill> {
+                return OrderFill.failed();
+            }
+            async executeMarketBuy(_pair: Pair, _quoteAmount: Amount): Promise<OrderFill> {
+                return OrderFill.failed();
+            }
             canExecuteBatch(count: number): boolean { return true; }
             async cancelOrder(order: any): Promise<OrderFill> { return OrderFill.failed(); }
             async cancelAllOrders(_pair: Pair): Promise<void> {}

@@ -8,12 +8,19 @@ import { Currency } from "../src/domain/valueObjects/Currency";
 import { Tick, Level } from "../src/domain/valueObjects/Tick";
 import { Amount } from "../src/domain/valueObjects/Amount";
 import { OrderExecutor } from "../src/domain/interfaces/OrderExecutor";
+import { OrderFill } from "../src/domain/valueObjects/OrderFill";
+import { TimeProvider } from "../src/infrastructure/TimeProvider";
 
 class MockExecutor implements OrderExecutor {
     async executeMakerBuy() { return {} as any; }
     async executeMakerSell() { return {} as any; }
-    async executeMarketBuy() { return {} as any; }
-    async executeMarketSell() { return {} as any; }
+    // Ordens a mercado devolvem OrderFill de verdade: os testes de flatten inspecionam o
+    // resultado, e um `{} as any` faria o `.apply()` estourar em vez de falhar no assert.
+    // Os parâmetros são declarados (mesmo sem uso) para que `spyOn(...).mock.calls` seja
+    // tipado como [Pair, Amount] em vez de tupla vazia — é assim que os testes leem a
+    // quantidade que o flatten pediu.
+    async executeMarketBuy(_pair: Pair, _quoteAmount: Amount): Promise<OrderFill> { return OrderFill.failed(); }
+    async executeMarketSell(_pair: Pair, _baseAmount: Amount): Promise<OrderFill> { return OrderFill.failed(); }
     async cancelOrder() { return {} as any; }
     async cancelAllOrders() {}
     canExecuteBatch() { return true; }
@@ -88,6 +95,8 @@ describe("MarketMakerCycle", () => {
             asks: [{ price: 60001, amountFactor: 1.0 }, { price: 60010, amountFactor: 1.5 }, { price: 60020, amountFactor: 2.0 }],
             bidEnabled: true,
             askEnabled: true,
+            bidVeto: null,
+            askVeto: null,
             q: 0,
             reservationPrice: 60000.5,
             effectiveSpread: 0.001,
@@ -123,7 +132,7 @@ describe("MarketMakerCycle", () => {
         im.getQuotes = () => ({
             bids: [{ price: 60000, amountFactor: 1.0 }, { price: 59900, amountFactor: 1.0 }, { price: 59800, amountFactor: 1.0 }],
             asks: [{ price: 60010, amountFactor: 1.0 }, { price: 60020, amountFactor: 1.0 }, { price: 60030, amountFactor: 1.0 }],
-            bidEnabled: true, askEnabled: true, q: 0,
+            bidEnabled: true, askEnabled: true, bidVeto: null, askVeto: null, q: 0,
             reservationPrice: 60005, effectiveSpread: 0.001, minSpreadFloor: 0.0005,
             bidDistancePct: 0.01, askDistancePct: 0.01, bidDistanceAbs: 1, askDistanceAbs: 1
         });
@@ -162,7 +171,7 @@ describe("MarketMakerCycle", () => {
         im.getQuotes = () => ({
             bids: [{ price: 60000, amountFactor: 1.0 }, { price: 59900, amountFactor: 1.0 }, { price: 59800, amountFactor: 1.0 }],
             asks: [{ price: 60010, amountFactor: 1.0 }, { price: 60020, amountFactor: 1.0 }, { price: 60030, amountFactor: 1.0 }],
-            bidEnabled: true, askEnabled: true, q: 0,
+            bidEnabled: true, askEnabled: true, bidVeto: null, askVeto: null, q: 0,
             reservationPrice: 60005, effectiveSpread: 0.001, minSpreadFloor: 0.0005,
             bidDistancePct: 0.01, askDistancePct: 0.01, bidDistanceAbs: 1, askDistanceAbs: 1
         });
@@ -201,7 +210,7 @@ describe("MarketMakerCycle", () => {
         im.getQuotes = () => ({
             bids: [{ price: 60000, amountFactor: 1.0 }, { price: 59900, amountFactor: 1.0 }, { price: 59800, amountFactor: 1.0 }],
             asks: [{ price: 60010, amountFactor: 1.0 }, { price: 60020, amountFactor: 1.0 }, { price: 60030, amountFactor: 1.0 }],
-            bidEnabled: true, askEnabled: true, q: 0,
+            bidEnabled: true, askEnabled: true, bidVeto: null, askVeto: null, q: 0,
             reservationPrice: 60005, effectiveSpread: 0.001, minSpreadFloor: 0.0005,
             bidDistancePct: 0.01, askDistancePct: 0.01, bidDistanceAbs: 1, askDistanceAbs: 1
         });
@@ -238,7 +247,7 @@ describe("MarketMakerCycle", () => {
         im.getQuotes = () => ({
             bids: [{ price: 60000, amountFactor: 1.0 }],
             asks: [{ price: 60010, amountFactor: 1.0 }],
-            bidEnabled: true, askEnabled: true, q: 0,
+            bidEnabled: true, askEnabled: true, bidVeto: null, askVeto: null, q: 0,
             reservationPrice: 60005, effectiveSpread: 0.001, minSpreadFloor: 0.0005,
             bidDistancePct: 0.01, askDistancePct: 0.01, bidDistanceAbs: 1, askDistanceAbs: 1
         });
@@ -273,7 +282,7 @@ describe("MarketMakerCycle", () => {
         im.getQuotes = () => ({
             bids: [{ price: 60000, amountFactor: 1.0 }],
             asks: [{ price: 60010, amountFactor: 1.0 }],
-            bidEnabled: true, askEnabled: true, q: 0,
+            bidEnabled: true, askEnabled: true, bidVeto: null, askVeto: null, q: 0,
             reservationPrice: 60005, effectiveSpread: 0.001, minSpreadFloor: 0.0005,
             bidDistancePct: 0.01, askDistancePct: 0.01, bidDistanceAbs: 1, askDistanceAbs: 1
         });
@@ -300,5 +309,155 @@ describe("MarketMakerCycle", () => {
         // Segunda passada: nada a cancelar, e a colocação é tentada de novo.
         await cycle.executeTick(pair);
         expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    describe("flattenInventory", () => {
+        /** Um OrderFill bem-sucedido, para o executor devolver algo inspecionável. */
+        function filled(qty: number, price: number): OrderFill {
+            return new OrderFill(new Amount(qty), new Amount(qty * price), new Amount(price), true);
+        }
+
+        function setup() {
+            const stateManager = new LocalStateManager();
+            const im = new InventoryManager();
+            const executor = new MockExecutor();
+            const cb = { shouldPause: () => false } as unknown as CircuitBreaker;
+            const cycle = new MarketMakerCycle(stateManager, cb, im, executor);
+            return { cycle, im, executor };
+        }
+
+        it("market-sells the excess above the target", async () => {
+            const { cycle, im, executor } = setup();
+            // 1 BTC a 100 = 100 de base, 0 em quote. Alvo 25% de 100 => 25.
+            // Excedente = 75 => vender 0,75 BTC.
+            im.baseBalance = 1;
+            im.quoteBalance = 0;
+
+            const sellSpy = spyOn(executor, "executeMarketSell")
+                .mockResolvedValue(filled(0.75, 100));
+
+            await cycle.flattenInventory(pair, 100, 10, 0.25);
+
+            expect(sellSpy).toHaveBeenCalledTimes(1);
+            let soldQty = 0;
+            sellSpy.mock.calls[0]![1].apply(v => soldQty = v);
+            expect(soldQty).toBeCloseTo(0.75, 8);
+        });
+
+        it("liquidates everything when the target is zero (kill switch path)", async () => {
+            const { cycle, im, executor } = setup();
+            im.baseBalance = 1;
+            im.quoteBalance = 0;
+
+            const sellSpy = spyOn(executor, "executeMarketSell")
+                .mockResolvedValue(filled(1, 100));
+
+            await cycle.flattenInventory(pair, 100, 10, 0);
+
+            let soldQty = 0;
+            sellSpy.mock.calls[0]![1].apply(v => soldQty = v);
+            expect(soldQty).toBeCloseTo(1, 8);
+        });
+
+        /**
+         * Trava de projeto: o flatten SÓ VENDE. Quem o chama é o kill switch de drawdown ou
+         * a defesa de queda — comprar BTC nesse momento seria aumentar risco sob o nome de
+         * "rebalancear".
+         */
+        it("NEVER buys when inventory is below target", async () => {
+            const { cycle, im, executor } = setup();
+            im.baseBalance = 0.01;   // 1 de valor
+            im.quoteBalance = 99;    // bem abaixo do alvo de 25%
+
+            const sellSpy = spyOn(executor, "executeMarketSell");
+            const buySpy = spyOn(executor, "executeMarketBuy");
+
+            await cycle.flattenInventory(pair, 100, 10, 0.25);
+
+            expect(sellSpy).not.toHaveBeenCalled();
+            expect(buySpy).not.toHaveBeenCalled();
+        });
+
+        it("does nothing when the excess is below the exchange minimum", async () => {
+            const { cycle, im, executor } = setup();
+            // Excedente de ~5, abaixo do minNotional de 10: a exchange rejeitaria.
+            im.baseBalance = 0.3;
+            im.quoteBalance = 70;
+
+            const sellSpy = spyOn(executor, "executeMarketSell");
+            await cycle.flattenInventory(pair, 100, 10, 0.25);
+
+            expect(sellSpy).not.toHaveBeenCalled();
+        });
+
+        it("cancels hanging orders too, not just active ones", async () => {
+            const { cycle, im, executor } = setup();
+            im.baseBalance = 1;
+            im.quoteBalance = 0;
+            spyOn(executor, "executeMarketSell").mockResolvedValue(filled(0.75, 100));
+
+            // BTC preso numa hanging order faz a venda a mercado falhar com -2010.
+            cycle.hangingSellOrders.push({
+                orderId: "999", symbol: "BTCUSDT", side: "SELL",
+                price: 105, qty: 0.5, timestamp: TimeProvider.now()
+            });
+            const cancelSpy = spyOn(executor, "cancelOrder");
+
+            await cycle.flattenInventory(pair, 100, 10, 0.25);
+
+            expect(cancelSpy).toHaveBeenCalledTimes(1);
+            expect(cycle.hangingSellOrders.length).toBe(0);
+        });
+
+        it("never asks to sell more base than it holds", async () => {
+            const { cycle, im, executor } = setup();
+            im.baseBalance = 0.5;
+            im.quoteBalance = 0;
+            const sellSpy = spyOn(executor, "executeMarketSell")
+                .mockResolvedValue(filled(0.5, 100));
+
+            await cycle.flattenInventory(pair, 100, 10, 0);
+
+            let soldQty = 0;
+            sellSpy.mock.calls[0]![1].apply(v => soldQty = v);
+            expect(soldQty).toBeLessThanOrEqual(0.5);
+        });
+
+        it("survives an executor exception without throwing", async () => {
+            const { cycle, im, executor } = setup();
+            im.baseBalance = 1;
+            im.quoteBalance = 0;
+            spyOn(executor, "executeMarketSell").mockRejectedValue(new Error("network down"));
+            const logSpy = spyOn(executor, "logError");
+
+            // Se isto lançar, o kill switch morre no meio e o motor nunca chega a parar.
+            await cycle.flattenInventory(pair, 100, 10, 0);
+
+            expect(logSpy).toHaveBeenCalled();
+        });
+
+        it("logs when the market sell does not fill", async () => {
+            const { cycle, im, executor } = setup();
+            im.baseBalance = 1;
+            im.quoteBalance = 0;
+            spyOn(executor, "executeMarketSell").mockResolvedValue(OrderFill.failed());
+            const logSpy = spyOn(executor, "logError");
+
+            await cycle.flattenInventory(pair, 100, 10, 0);
+
+            expect(logSpy).toHaveBeenCalled();
+        });
+
+        it("does not fire automatically while trend auto-flatten is disabled", async () => {
+            const { cycle, executor } = setup();
+            const sellSpy = spyOn(executor, "executeMarketSell");
+
+            // Default é desligado: liquidação por tendência é taker e precisa de validação
+            // da taxa real antes de rodar sozinha.
+            expect(cycle.TREND_FLATTEN_ENABLED).toBeFalse();
+            await cycle.executeTick(pair, 0, 0, true, 1.5, 10, -0.05, 0.004, 0.01);
+
+            expect(sellSpy).not.toHaveBeenCalled();
+        });
     });
 });
