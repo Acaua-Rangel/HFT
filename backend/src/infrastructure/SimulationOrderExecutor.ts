@@ -49,6 +49,19 @@ export class SimulationOrderExecutor implements OrderExecutor {
         return true;
     }
 
+    public logError(type: string, message: string): void {
+        console.error(`[SIM ERROR] ${type}: ${message}`);
+        const entry = new ErrorLogEntry(
+            { asString: () => crypto.randomUUID() } as any,
+            { asNumber: () => Date.now() } as any,
+            new ErrorType(type),
+            new ErrorMessage(message),
+            new StackTrace(null),
+            new ErrorContext("{}")
+        );
+        this.errorLogger.save(entry);
+    }
+
         private activeOrders = new Map<string, { order: ActiveOrder, pair: Pair, amountVal: number, truncatedQty: number }>();
 
     public async executeMakerBuy(pair: Pair, amount: Amount, price?: Amount): Promise<ActiveOrder | null> {

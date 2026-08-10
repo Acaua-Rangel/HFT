@@ -224,33 +224,66 @@ export class MarketMakerCycle {
                 if (o) lockedBase += o.qty;
             }
 
-            if (!this.activeBuyOrders[i] && bidEnabled && targetBid > 0 && buyLevelQuote >= MIN_ORDER_VALUE && (buyLevelQuote + lockedQuote) <= this.inventoryManager.quoteBalance) {
-                const quoteToSpend = new Amount(buyLevelQuote); 
-                this.activeBuyOrders[i] = { orderId: "-1", symbol: "", side: "BUY", price: targetBid, qty: buyLevelQuote / targetBid, timestamp: Date.now() }; // Optimistic lock
-                promises.push(
-                    this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(targetBid))
-                    .then(order => { 
-                        if (order) this.activeBuyOrders[i] = order; 
-                        else this.activeBuyOrders[i] = null;
-                    })
-                );
+            if (!this.activeBuyOrders[i] && bidEnabled && targetBid > 0) {
+                const meetsMin = buyLevelQuote >= MIN_ORDER_VALUE;
+                const hasBalance = (buyLevelQuote + lockedQuote) <= this.inventoryManager.quoteBalance;
+                
+                if (meetsMin && hasBalance) {
+                    const quoteToSpend = new Amount(buyLevelQuote); 
+                    this.activeBuyOrders[i] = { orderId: "-1", symbol: "", side: "BUY", price: targetBid, qty: buyLevelQuote / targetBid, timestamp: Date.now() }; // Optimistic lock
+                    promises.push(
+                        this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(targetBid))
+                        .then(order => { 
+                            if (order) this.activeBuyOrders[i] = order; 
+                            else this.activeBuyOrders[i] = null;
+                        })
+                    );
+                } else if (!hasBalance) {
+                    this.logStuck(`BUY L${i} BLOCKED: Insufficient Balance. Required: ${buyLevelQuote.toFixed(2)} | Locked: ${lockedQuote.toFixed(2)} | Free(Total): ${this.inventoryManager.quoteBalance.toFixed(2)}`);
+                } else if (!meetsMin) {
+                    this.logStuck(`BUY L${i} BLOCKED: Below Min Order Value. Required: 10.00 | Actual: ${buyLevelQuote.toFixed(2)}`);
+                }
             }
 
-            if (!this.activeSellOrders[i] && askEnabled && targetAsk > 0 && (sellLevelBase * midPrice) >= MIN_ORDER_VALUE && (sellLevelBase + lockedBase) <= this.inventoryManager.baseBalance) {
-                const baseToSell = new Amount(sellLevelBase);
-                this.activeSellOrders[i] = { orderId: "-1", symbol: "", side: "SELL", price: targetAsk, qty: sellLevelBase, timestamp: Date.now() }; // Optimistic lock
-                promises.push(
-                    this.executor.executeMakerSell(pair, baseToSell, new Amount(targetAsk))
-                    .then(order => { 
-                        if (order) this.activeSellOrders[i] = order; 
-                        else this.activeSellOrders[i] = null;
-                    })
-                );
+            if (!this.activeSellOrders[i] && askEnabled && targetAsk > 0) {
+                const meetsMin = (sellLevelBase * midPrice) >= MIN_ORDER_VALUE;
+                const hasBalance = (sellLevelBase + lockedBase) <= this.inventoryManager.baseBalance;
+                
+                if (meetsMin && hasBalance) {
+                    const baseToSell = new Amount(sellLevelBase);
+                    this.activeSellOrders[i] = { orderId: "-1", symbol: "", side: "SELL", price: targetAsk, qty: sellLevelBase, timestamp: Date.now() }; // Optimistic lock
+                    promises.push(
+                        this.executor.executeMakerSell(pair, baseToSell, new Amount(targetAsk))
+                        .then(order => { 
+                            if (order) this.activeSellOrders[i] = order; 
+                            else this.activeSellOrders[i] = null;
+                        })
+                    );
+                } else if (!hasBalance) {
+                    this.logStuck(`SELL L${i} BLOCKED: Insufficient Balance. Required: ${sellLevelBase.toFixed(6)} | Locked: ${lockedBase.toFixed(6)} | Free(Total): ${this.inventoryManager.baseBalance.toFixed(6)}`);
+                } else if (!meetsMin) {
+                    this.logStuck(`SELL L${i} BLOCKED: Below Min Order Value. Required: 10.00 | Actual: ${(sellLevelBase * midPrice).toFixed(2)}`);
+                }
             }
         }
 
         if (promises.length > 0) {
             await Promise.all(promises);
+        }
+    }
+
+    private lastStuckLog = 0;
+    private logStuck(message: string) {
+        const now = Date.now();
+        if (now - this.lastStuckLog > 60000) { // Log once per minute max
+            console.log(`\n🛑 [DIAGNOSTIC] ${message}`);
+            
+            // Also log to the error_logs table so it shows up in diagnostic scripts
+            try {
+                this.executor.logError("DIAGNOSTIC_STUCK", message);
+            } catch (err) {}
+            
+            this.lastStuckLog = now;
         }
     }
 }

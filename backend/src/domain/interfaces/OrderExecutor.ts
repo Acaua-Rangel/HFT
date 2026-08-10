@@ -17,5 +17,6 @@ export interface OrderExecutor {
   cancelOrder(order: ActiveOrder): Promise<OrderFill>;
   cancelAllOrders(pair: Pair): Promise<void>;
   canExecuteBatch(count: number): boolean;
+  logError(type: string, message: string): void;
 }
 
