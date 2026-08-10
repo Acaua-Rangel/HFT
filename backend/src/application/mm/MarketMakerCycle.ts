@@ -212,9 +212,15 @@ export class MarketMakerCycle {
             for (const o of this.activeBuyOrders) {
                 if (o) lockedQuote += (o.qty * o.price);
             }
+            for (const o of this.hangingBuyOrders) {
+                if (o) lockedQuote += (o.qty * o.price);
+            }
             
             let lockedBase = 0;
             for (const o of this.activeSellOrders) {
+                if (o) lockedBase += o.qty;
+            }
+            for (const o of this.hangingSellOrders) {
                 if (o) lockedBase += o.qty;
             }
 

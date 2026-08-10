@@ -240,4 +240,30 @@ describe.skip("SimulationOrderExecutor", () => {
         await executor.executeMakerBuy(pair, new Amount(100), new Amount(100), 10);
         expect(executor.totalFeesCollected).toBeGreaterThan(0);
     });
+
+    test("cancelAllOrders successfully clears activeOrders", async () => {
+        const mockStateManager = {
+            retrieveOrderBook: () => createOrderBook(100)
+        } as unknown as StateManager;
+
+        const executor = new SimulationOrderExecutor(
+            new MockErrorLogRepository() as any,
+            new MockTransactionRepository() as any,
+            new MockPrecisionFetcher() as unknown as BinancePrecisionFetcher,
+            mockStateManager
+        );
+        executor.setInitialBalances(5, 50000);
+
+        // Place an order
+        await executor.executeMakerBuy(pair, new Amount(100), new Amount(100), 10);
+        
+        // It shouldn't be empty
+        expect(executor["activeOrders"].size).toBeGreaterThan(0);
+
+        // Cancel all
+        await executor.cancelAllOrders(pair);
+
+        // It should be empty
+        expect(executor["activeOrders"].size).toBe(0);
+    });
 });

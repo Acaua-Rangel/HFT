@@ -120,6 +120,18 @@ export class SimulationOrderExecutor implements OrderExecutor {
         return new OrderFill(executedQtyAmt, cummulativeQuoteQtyAmt, averagePriceAmt, true);
     }
 
+    public async cancelAllOrders(pair: Pair): Promise<void> {
+        let symbol = "";
+        pair.applyBinanceSymbol((sym) => { symbol = sym; });
+
+        this.activeOrders.forEach((o, id) => {
+            if (o.order.symbol === symbol) {
+                this.activeOrders.delete(id);
+            }
+        });
+        console.log(`🧹 [SIM] Canceled all open orders for ${symbol}.`);
+    }
+
     private async simulateOrder(side: "BUY"|"SELL", pair: Pair, amount: Amount, price: Amount | undefined): Promise<ActiveOrder | null> {
         let symbol = "";
         pair.applyBinanceSymbol((sym) => { symbol = sym; });

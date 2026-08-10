@@ -273,4 +273,15 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     expect(errRepo.errors.length).toBe(1);
     expect(errRepo.errors[0].errorType.value).toBe("ORDER_REJECTED");
   });
+
+  test("Cancel All - Should successfully invoke openOrders.cancelAll endpoint", async () => {
+    const mockClient = new MockWsClient();
+    const precisionFetcher = new MockPrecisionFetcher();
+    const executor = new BinanceOrderExecutor(mockClient, new MockErrorLogRepository() as any, new MockTransactionRepository() as any, precisionFetcher as any, mockStateManager as any);
+    executor.forceInjectWsClientForTests(mockClient, new ExecutionRateLimiter(50, 10000));
+
+    await executor.cancelAllOrders(pair);
+
+    expect(mockClient.lastParams.symbol).toBe("BTCBRL");
+  });
 });

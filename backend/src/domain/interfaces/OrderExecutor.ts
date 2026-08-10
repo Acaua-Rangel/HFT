@@ -15,6 +15,7 @@ export interface OrderExecutor {
   executeMakerBuy(pair: Pair, amount: Amount, price?: Amount): Promise<ActiveOrder | null>;
   executeMakerSell(pair: Pair, amount: Amount, price?: Amount): Promise<ActiveOrder | null>;
   cancelOrder(order: ActiveOrder): Promise<OrderFill>;
+  cancelAllOrders(pair: Pair): Promise<void>;
   canExecuteBatch(count: number): boolean;
 }
 

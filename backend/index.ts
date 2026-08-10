@@ -91,10 +91,17 @@ function switchMode(newMode: "LIVE" | "SIMULATION", simQuoteBalance?: number) {
         simExecutor.setInitialBalances(0, initialQuote);
         mmCycle.executor = simExecutor;
         userDataStream.disconnect();
+        
+        // Clear simulation orderbook
+        simExecutor.cancelAllOrders(mmPair).catch(console.error);
         console.log(`🧪 Switched to SIMULATION mode (Quote: ${initialQuote})`);
     } else {
         mmCycle.executor = binanceExecutor;
         userDataStream.connect().catch(console.error);
+        
+        // Cancel all existing orders for the pair to start with a clean slate
+        binanceExecutor.cancelAllOrders(mmPair).catch(console.error);
+        
         console.log(`⚡ Switched to LIVE mode`);
     }
 }

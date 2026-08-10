@@ -188,6 +188,25 @@ export class BinanceOrderExecutor implements OrderExecutor {
       }
   }
 
+  public async cancelAllOrders(pair: Pair): Promise<void> {
+      await this.ensureConnected();
+      if (!this.wsClient.isReady()) return;
+
+      let symbol = "";
+      pair.applyBinanceSymbol((sym) => { symbol = sym; });
+
+      try {
+          const cancelRes: WsResponse = await this.wsClient.sendRequest("openOrders.cancelAll", { symbol }, 5000);
+          if (cancelRes.status !== 200) {
+              this.logError("CANCEL_ALL_FAILED", JSON.stringify(cancelRes.error));
+          } else {
+              console.log(`🧹 Successfully canceled all open orders for ${symbol}.`);
+          }
+      } catch (err) {
+          this.logError("CANCEL_ALL_EXCEPTION", err instanceof Error ? err.message : String(err));
+      }
+  }
+
   public forceInjectWsClientForTests(mockClient: BinanceWsClient, mockLimiter: ExecutionRateLimiter): void {
     this.wsClient = mockClient;
     this.rateLimiter = mockLimiter;
