@@ -186,11 +186,11 @@ describe("MarketMakerCycle", () => {
         
         // Should cancel the existing order because of price deviation
         expect(cancelSpy).toHaveBeenCalledTimes(1);
-        // L0 is cleared, so L0, L1, and L2 should be placed
-        expect(buySpy).toHaveBeenCalledTimes(3); 
+        // ORDER_LEVELS = 1, so only L0 is replaced
+        expect(buySpy).toHaveBeenCalledTimes(1);
     });
 
-    it("should cancel and replace the order if it is older than 10 seconds", async () => {
+    it("should cancel and replace the order if it exceeds MAX_ORDER_AGE_MS", async () => {
         const stateManager = new LocalStateManager();
         stateManager.registerPair(pair);
 
@@ -211,19 +211,94 @@ describe("MarketMakerCycle", () => {
         const cycle = new MarketMakerCycle(stateManager, cb, im, executor);
         cycle.lotConfig = { mode: "FIXED", value: 50 };
 
-        // Mock an active order with PERFECT price (60000) but 11 seconds old
-        cycle.activeBuyOrders[0] = { orderId: "123", symbol: "BTCUSDT", side: "BUY", price: 60000, qty: 1, timestamp: Date.now() - 11000 };
-        
+        // Mock an active order with PERFECT price (60000) but older than MAX_ORDER_AGE_MS (60s)
+        cycle.activeBuyOrders[0] = { orderId: "123", symbol: "BTCUSDT", side: "BUY", price: 60000, qty: 1, timestamp: Date.now() - 61000 };
+
         const cancelSpy = spyOn(executor, "cancelOrder");
         const buySpy = spyOn(executor, "executeMakerBuy");
-        
+
         const tick = new Tick(pair, [{ price: new Amount(60010), qty: new Amount(1) }], [{ price: new Amount(60005), qty: new Amount(1) }]);
         stateManager.updateState(tick);
 
         await cycle.executeTick(pair);
-        
+
         // Should cancel the existing order because of age
         expect(cancelSpy).toHaveBeenCalledTimes(1);
-        expect(buySpy).toHaveBeenCalledTimes(3); 
+        expect(buySpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("should not cancel a fresh order whose price is still within tolerance", async () => {
+        const stateManager = new LocalStateManager();
+        stateManager.registerPair(pair);
+
+        const im = new InventoryManager();
+        im.baseBalance = 1;
+        im.quoteBalance = 60000;
+
+        im.getQuotes = () => ({
+            bids: [{ price: 60000, amountFactor: 1.0 }],
+            asks: [{ price: 60010, amountFactor: 1.0 }],
+            bidEnabled: true, askEnabled: true, q: 0,
+            reservationPrice: 60005, effectiveSpread: 0.001, minSpreadFloor: 0.0005,
+            bidDistancePct: 0.01, askDistancePct: 0.01, bidDistanceAbs: 1, askDistanceAbs: 1
+        });
+
+        const executor = new MockExecutor();
+        const cb = { shouldPause: () => false } as unknown as CircuitBreaker;
+        const cycle = new MarketMakerCycle(stateManager, cb, im, executor);
+        cycle.lotConfig = { mode: "FIXED", value: 50 };
+
+        // Desvio de 1/60000 = 0.0017%, muito abaixo da tolerância; idade de 5s < 60s.
+        cycle.activeBuyOrders[0] = { orderId: "123", symbol: "BTCUSDT", side: "BUY", price: 60001, qty: 1, timestamp: Date.now() - 5000 };
+
+        const cancelSpy = spyOn(executor, "cancelOrder");
+
+        const tick = new Tick(pair, [{ price: new Amount(60010), qty: new Amount(1) }], [{ price: new Amount(60005), qty: new Amount(1) }]);
+        stateManager.updateState(tick);
+
+        await cycle.executeTick(pair);
+
+        // Manter a ordem parada é o que preserva prioridade de fila.
+        expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it("should not leave an optimistic lock behind when placement throws", async () => {
+        const stateManager = new LocalStateManager();
+        stateManager.registerPair(pair);
+
+        const im = new InventoryManager();
+        im.baseBalance = 0;
+        im.quoteBalance = 60000;
+
+        im.getQuotes = () => ({
+            bids: [{ price: 60000, amountFactor: 1.0 }],
+            asks: [{ price: 60010, amountFactor: 1.0 }],
+            bidEnabled: true, askEnabled: true, q: 0,
+            reservationPrice: 60005, effectiveSpread: 0.001, minSpreadFloor: 0.0005,
+            bidDistancePct: 0.01, askDistancePct: 0.01, bidDistanceAbs: 1, askDistanceAbs: 1
+        });
+
+        const executor = new MockExecutor();
+        executor.executeMakerBuy = async () => { throw new Error("WS timeout"); };
+
+        const cb = { shouldPause: () => false } as unknown as CircuitBreaker;
+        const cycle = new MarketMakerCycle(stateManager, cb, im, executor);
+        cycle.lotConfig = { mode: "FIXED", value: 50 };
+
+        const cancelSpy = spyOn(executor, "cancelOrder");
+
+        const tick = new Tick(pair, [{ price: new Amount(60010), qty: new Amount(1) }], [{ price: new Amount(60005), qty: new Amount(1) }]);
+        stateManager.updateState(tick);
+
+        await cycle.executeTick(pair);
+
+        // O lock otimista não pode sobreviver à exceção: se sobreviver, seu notional
+        // desconta saldo de um pedido inexistente e ele acaba sendo enviado a
+        // cancelOrder com um id que a Binance rejeita (-1100).
+        expect(cycle.activeBuyOrders[0]).toBeNull();
+
+        // Segunda passada: nada a cancelar, e a colocação é tentada de novo.
+        await cycle.executeTick(pair);
+        expect(cancelSpy).not.toHaveBeenCalled();
     });
 });

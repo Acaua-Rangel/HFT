@@ -213,8 +213,7 @@ async function startHftEngine() {
                     isEngineRunning = false;
                     console.error("🛑 ENGINE HALTED BY GLOBAL STOP LOSS.");
                     // Force cancel all active
-                    mmCycle.activeBuyOrders.forEach(o => { if(o) mmCycle.executor.cancelOrder(o).catch(()=>{}); });
-                    mmCycle.activeSellOrders.forEach(o => { if(o) mmCycle.executor.cancelOrder(o).catch(()=>{}); });
+                    await mmCycle.cancelAllActiveOrders();
                     return;
                 }
                 

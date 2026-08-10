@@ -31,6 +31,16 @@ export class MarketMakerCycle {
 
     private readonly PING_PONG_SPREAD = 0.001; // 0.1% minimum profit for ping-pong
 
+    // Id sentinela do lock otimista: a ordem foi reservada localmente mas ainda não existe
+    // na exchange. Nunca pode ser enviada para cancelOrder — a Binance exige orderId
+    // numérico e rejeita com -1100 ("Illegal characters found in parameter 'orderId'").
+    private static readonly PENDING_ORDER_ID = "__PENDING__";
+
+    // Hanging orders não são reavaliadas pelo ciclo de refresh; sem expiração elas
+    // acumulam indefinidamente e seguem descontando saldo disponível.
+    private readonly HANGING_MAX_AGE_MS = 600000;   // 10 minutos
+    private readonly HANGING_MAX_DRIFT_PCT = 0.01;  // 1% de distância do mid
+
     public currentPair: Pair | null = null;
 
     constructor(
@@ -100,6 +110,65 @@ export class MarketMakerCycle {
         }
     }
 
+    /** True quando a ordem existe de fato na exchange e pode ser cancelada. */
+    private isCancelable(order: ActiveOrder | null | undefined): order is ActiveOrder {
+        return !!order && order.orderId !== MarketMakerCycle.PENDING_ORDER_ID;
+    }
+
+    /**
+     * Cancela uma ordem rastreada. Locks otimistas são apenas descartados: eles nunca
+     * chegaram à exchange, então cancelá-los produz erro de parâmetro e nada mais.
+     */
+    private async cancelTracked(order: ActiveOrder): Promise<void> {
+        if (!this.isCancelable(order)) return;
+        try {
+            await this.executor.cancelOrder(order);
+        } catch {
+            // Falha de cancelamento não pode derrubar o ciclo; o refresh tenta de novo.
+        }
+    }
+
+    /** Cancela e limpa todas as ordens ativas rastreadas (usado pelo kill switch). */
+    public async cancelAllActiveOrders(): Promise<void> {
+        const pending: Promise<void>[] = [];
+        for (let i = 0; i < this.activeBuyOrders.length; i++) {
+            const o = this.activeBuyOrders[i];
+            this.activeBuyOrders[i] = null;
+            if (o) pending.push(this.cancelTracked(o));
+        }
+        for (let i = 0; i < this.activeSellOrders.length; i++) {
+            const o = this.activeSellOrders[i];
+            this.activeSellOrders[i] = null;
+            if (o) pending.push(this.cancelTracked(o));
+        }
+        await Promise.all(pending);
+    }
+
+    /**
+     * Expira hanging orders por idade ou por distância do preço atual. Sem isso elas só
+     * saem do array quando executam — e enquanto ficam, seu notional é descontado do
+     * saldo disponível, o que estrangula a cotação dos níveis principais.
+     */
+    private async reapHangingOrders(midPrice: number): Promise<void> {
+        const now = TimeProvider.now();
+        const expired: ActiveOrder[] = [];
+
+        const keep = (o: ActiveOrder): boolean => {
+            const tooOld = now - o.timestamp > this.HANGING_MAX_AGE_MS;
+            const drifted = midPrice > 0
+                && Math.abs(o.price - midPrice) / midPrice > this.HANGING_MAX_DRIFT_PCT;
+            if (tooOld || drifted) { expired.push(o); return false; }
+            return true;
+        };
+
+        this.hangingBuyOrders = this.hangingBuyOrders.filter(keep);
+        this.hangingSellOrders = this.hangingSellOrders.filter(keep);
+
+        if (expired.length) {
+            await Promise.all(expired.map(o => this.cancelTracked(o)));
+        }
+    }
+
     private async handleOrderCanceled(report: ExecutionReport): Promise<void> {
         for (let i = 0; i < this.activeBuyOrders.length; i++) {
             if (this.activeBuyOrders[i]?.orderId === report.clientOrderId || this.activeBuyOrders[i]?.orderId === report.orderId.toString()) {
@@ -133,17 +202,11 @@ export class MarketMakerCycle {
             ].filter((o): o is ActiveOrder => o !== null);
             this.activeBuyOrders.length = levels;
             this.activeSellOrders.length = levels;
-            await Promise.all(orphans.map(o => this.executor.cancelOrder(o).catch(() => {})));
+            await Promise.all(orphans.map(o => this.cancelTracked(o)));
         }
 
         if (this.circuitBreaker.shouldPause(pair)) {
-            // Cancel all active orders if circuit breaker triggers (Hanging orders are optionally kept, but we'll cancel them for safety)
-            for (let i = 0; i < this.activeBuyOrders.length; i++) {
-                if (this.activeBuyOrders[i]) { await this.executor.cancelOrder(this.activeBuyOrders[i]!); this.activeBuyOrders[i] = null; }
-            }
-            for (let i = 0; i < this.activeSellOrders.length; i++) {
-                if (this.activeSellOrders[i]) { await this.executor.cancelOrder(this.activeSellOrders[i]!); this.activeSellOrders[i] = null; }
-            }
+            await this.cancelAllActiveOrders();
             return;
         }
 
@@ -238,16 +301,20 @@ export class MarketMakerCycle {
         const refreshWindowOpen = now - this.lastRefreshAt >= this.ORDER_REFRESH_TIME_MS;
         if (ageExceeded || (priceDrifted && refreshWindowOpen)) {
             this.lastRefreshAt = now;
-            const cancels: Promise<unknown>[] = [];
+            const cancels: Promise<void>[] = [];
             for (let i = 0; i < levels; i++) {
                 const b = this.activeBuyOrders[i];
-                if (b) { cancels.push(this.executor.cancelOrder(b)); this.activeBuyOrders[i] = null; }
+                this.activeBuyOrders[i] = null;
+                if (b) cancels.push(this.cancelTracked(b));
                 const s = this.activeSellOrders[i];
-                if (s) { cancels.push(this.executor.cancelOrder(s)); this.activeSellOrders[i] = null; }
+                this.activeSellOrders[i] = null;
+                if (s) cancels.push(this.cancelTracked(s));
             }
             // Em paralelo: serializados, 2×ORDER_LEVELS round-trips cabiam mal no ciclo.
             await Promise.all(cancels);
         }
+
+        await this.reapHangingOrders(midPrice);
 
         const promises: Promise<void>[] = [];
 
@@ -259,7 +326,9 @@ export class MarketMakerCycle {
 
             // Cancelamentos já foram resolvidos em bloco acima; aqui só preenchemos
             // os níveis vazios (ordem executada, cancelada ou ainda não colocada).
-            // Place new orders if empty
+            // Recalculado a cada nível porque os níveis anteriores já reservaram saldo.
+            // O clamp evita que estado rastreado divergente da exchange produza um
+            // "disponível" negativo e trave a cotação para sempre.
             let lockedQuote = 0;
             for (const o of this.activeBuyOrders) {
                 if (o) lockedQuote += (o.qty * o.price);
@@ -267,7 +336,8 @@ export class MarketMakerCycle {
             for (const o of this.hangingBuyOrders) {
                 if (o) lockedQuote += (o.qty * o.price);
             }
-            
+            lockedQuote = Math.min(lockedQuote, this.inventoryManager.quoteBalance);
+
             let lockedBase = 0;
             for (const o of this.activeSellOrders) {
                 if (o) lockedBase += o.qty;
@@ -275,6 +345,7 @@ export class MarketMakerCycle {
             for (const o of this.hangingSellOrders) {
                 if (o) lockedBase += o.qty;
             }
+            lockedBase = Math.min(lockedBase, this.inventoryManager.baseBalance);
 
             if (!this.activeBuyOrders[i] && bidEnabled && targetBid > 0) {
                 let finalBuyLevelQuote = buyLevelQuote;
@@ -285,13 +356,18 @@ export class MarketMakerCycle {
                 const meetsMin = finalBuyLevelQuote >= MIN_ORDER_VALUE;
                 
                 if (meetsMin) {
-                    const quoteToSpend = new Amount(finalBuyLevelQuote); 
-                    this.activeBuyOrders[i] = { orderId: "-1", symbol: "", side: "BUY", price: targetBid, qty: finalBuyLevelQuote / targetBid, timestamp: TimeProvider.now() }; // Optimistic lock
+                    const quoteToSpend = new Amount(finalBuyLevelQuote);
+                    // Lock otimista: reserva o saldo para os próximos níveis desta mesma
+                    // passada. O .catch é essencial — sem ele uma exceção na colocação
+                    // deixa o lock preso para sempre, descontando saldo de um pedido que
+                    // nunca existiu e sendo enviado a cancelOrder com um id inválido.
+                    this.activeBuyOrders[i] = { orderId: MarketMakerCycle.PENDING_ORDER_ID, symbol: "", side: "BUY", price: targetBid, qty: finalBuyLevelQuote / targetBid, timestamp: TimeProvider.now() };
                     promises.push(
                         this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(targetBid))
-                        .then(order => { 
-                            if (order) this.activeBuyOrders[i] = order; 
-                            else this.activeBuyOrders[i] = null;
+                        .then(order => { this.activeBuyOrders[i] = order ?? null; })
+                        .catch(err => {
+                            this.activeBuyOrders[i] = null;
+                            this.executor.logError("ORDER_PLACE_EXCEPTION", `BUY L${i}: ${err instanceof Error ? err.message : String(err)}`);
                         })
                     );
                 } else if (i === 0 && finalBuyLevelQuote < MIN_ORDER_VALUE) {
@@ -309,12 +385,13 @@ export class MarketMakerCycle {
                 
                 if (meetsMin) {
                     const baseToSell = new Amount(finalSellLevelBase);
-                    this.activeSellOrders[i] = { orderId: "-1", symbol: "", side: "SELL", price: targetAsk, qty: finalSellLevelBase, timestamp: TimeProvider.now() }; // Optimistic lock
+                    this.activeSellOrders[i] = { orderId: MarketMakerCycle.PENDING_ORDER_ID, symbol: "", side: "SELL", price: targetAsk, qty: finalSellLevelBase, timestamp: TimeProvider.now() };
                     promises.push(
                         this.executor.executeMakerSell(pair, baseToSell, new Amount(targetAsk))
-                        .then(order => { 
-                            if (order) this.activeSellOrders[i] = order; 
-                            else this.activeSellOrders[i] = null;
+                        .then(order => { this.activeSellOrders[i] = order ?? null; })
+                        .catch(err => {
+                            this.activeSellOrders[i] = null;
+                            this.executor.logError("ORDER_PLACE_EXCEPTION", `SELL L${i}: ${err instanceof Error ? err.message : String(err)}`);
                         })
                     );
                 } else if (i === 0 && !meetsMin) {
