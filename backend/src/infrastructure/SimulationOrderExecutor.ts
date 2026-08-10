@@ -7,6 +7,7 @@ import { TransactionRepository, TransactionLogEntry, LogId, Timestamp, TradeId, 
 import { BinancePrecisionFetcher } from "./BinancePrecisionFetcher";
 import { StateManager } from "../domain/interfaces/StateManager";
 import * as crypto from "crypto";
+import { TimeProvider } from "./TimeProvider";
 
 /**
  * SimulationOrderExecutor mimics BinanceOrderExecutor's full behavior:
@@ -53,7 +54,7 @@ export class SimulationOrderExecutor implements OrderExecutor {
         console.error(`[SIM ERROR] ${type}: ${message}`);
         const entry = new ErrorLogEntry(
             { asString: () => crypto.randomUUID() } as any,
-            { asNumber: () => Date.now() } as any,
+            { asNumber: () => TimeProvider.now() } as any,
             new ErrorType(type),
             new ErrorMessage(message),
             new StackTrace(null),
@@ -80,7 +81,9 @@ export class SimulationOrderExecutor implements OrderExecutor {
         // Simulate TTL wait
         const ttlMs = 1500;
         const simWait = ttlMs * (0.1 + Math.random() * 0.9);
-        await new Promise(r => setTimeout(r, simWait));
+        if (!TimeProvider.isVirtual()) {
+            await new Promise(r => setTimeout(r, simWait));
+        }
 
         const fillRoll = Math.random();
         let fillRatio = 0;
@@ -198,25 +201,14 @@ export class SimulationOrderExecutor implements OrderExecutor {
             side,
             price: roundedPrice,
             qty: truncatedQty,
-            timestamp: Date.now()
+            timestamp: TimeProvider.now()
         };
 
         this.activeOrders.set(activeOrder.orderId, { order: activeOrder, pair, amountVal, truncatedQty });
         return activeOrder;
     }
 
-private logError(type: string, message: string): void {
-        console.error(`[SIM][${type}] ${message}`);
-        const entry = new ErrorLogEntry(
-            { asString: () => crypto.randomUUID() } as any,
-            { asNumber: () => Date.now() } as any,
-            new ErrorType(type),
-            new ErrorMessage(message),
-            new StackTrace(null),
-            new ErrorContext("{}")
-        );
-        this.errorLogger.save(entry);
-    }
+
 
     private logTrade(symbol: string, quantity: Amount, price: Amount, status: string): void {
         let rawQty = 0;
@@ -228,7 +220,7 @@ private logError(type: string, message: string): void {
 
         const entry = new TransactionLogEntry(
             new LogId(crypto.randomUUID()),
-            new Timestamp(Date.now()),
+            new Timestamp(TimeProvider.now()),
             new TradeId(crypto.randomUUID()),
             new AssetName(symbol),
             new MonetaryValue(rawQty),

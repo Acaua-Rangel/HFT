@@ -1,5 +1,6 @@
 import { BinancePriceIngestor } from "../../infrastructure/BinancePriceIngestor";
 import { Pair } from "../../domain/valueObjects/Pair";
+import { TimeProvider } from "../../infrastructure/TimeProvider";
 
 export class TradeIntensityMonitor {
     private readonly WINDOW_MS = 60000; // 60 seconds
@@ -7,12 +8,12 @@ export class TradeIntensityMonitor {
 
     constructor(ingestor: BinancePriceIngestor) {
         ingestor.onTrade((symbol, volume) => {
-            this.tradeHistory.push({ ts: Date.now(), volume });
+            this.tradeHistory.push({ ts: TimeProvider.now(), volume });
         });
     }
 
     public getK(pair: Pair): number {
-        const now = Date.now();
+        const now = TimeProvider.now();
         // Keep only trades within the window
         this.tradeHistory = this.tradeHistory.filter(t => now - t.ts <= this.WINDOW_MS);
         

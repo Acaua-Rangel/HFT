@@ -1,3 +1,5 @@
+import { TimeProvider } from "./TimeProvider";
+
 export class ExecutionRateLimiter {
   private timestamps: number[] = [];
 
@@ -12,14 +14,14 @@ export class ExecutionRateLimiter {
   }
 
   public recordUsage(count: number): void {
-    const now = Date.now();
+    const now = TimeProvider.now();
     for (let i = 0; i < count; i++) {
       this.timestamps.push(now);
     }
   }
 
   private cleanup(): void {
-    const cutoff = Date.now() - this.windowMs;
+    const cutoff = TimeProvider.now() - this.windowMs;
     this.timestamps = this.timestamps.filter(t => t > cutoff);
   }
 }

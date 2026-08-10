@@ -113,8 +113,14 @@ function App() {
   const [isEditingSimBnbBalance, setIsEditingSimBnbBalance] = useState(false);
   const [simBnbBalanceInput, setSimBnbBalanceInput] = useState("");
   
-  const [tradingMode, setTradingMode] = useState<"SIMULATION" | "LIVE">("SIMULATION");
+  const [tradingMode, setTradingMode] = useState<"BACKTEST" | "LIVE">("BACKTEST");
   const [showLiveModal, setShowLiveModal] = useState(false);
+  const [backtestStart, setBacktestStart] = useState<string>(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 16));
+  const [backtestEnd, setBacktestEnd] = useState<string>(new Date().toISOString().slice(0, 16));
+  const [backtestStatus, setBacktestStatus] = useState<"IDLE" | "DOWNLOADING" | "RUNNING" | "COMPLETED" | "ERROR">("IDLE");
+  const [backtestProgress, setBacktestProgress] = useState<number>(0);
+  const [backtestResults, setBacktestResults] = useState<any>(null);
+  const [backtestError, setBacktestError] = useState<string>("");
   const [liveConfirmInput, setLiveConfirmInput] = useState("");
   const [bnbDiscount, setBnbDiscount] = useState(false);
   const [activePair, setActivePair] = useState<string>("btcbrl");
@@ -189,6 +195,14 @@ function App() {
               bnbDiscountRef.current = data.bnbDiscount;
             }
             if (data.bnbDiscountLocked !== undefined) setBnbDiscountLocked(data.bnbDiscountLocked);
+          } else if (data.type === 'BACKTEST_STATUS') {
+            setBacktestStatus(data.status);
+            if (data.status === 'ERROR') setBacktestError(data.message);
+            if (data.status === 'COMPLETED') setBacktestResults(data);
+          } else if (data.type === 'BACKTEST_PROGRESS') {
+            setBacktestProgress(data.progress);
+            setBalance(data.quoteBalance);
+            setTelemetry((prev: any) => ({ ...prev, baseBalance: data.baseBalance, quoteBalance: data.quoteBalance }));
           }
         } catch (e) {
           console.error("Invalid WS message");
@@ -272,14 +286,14 @@ function App() {
   const maxLotPct = 0.60;
   const maxLotAmount = currentTotalWealth * maxLotPct;
 
-  const handleToggleMode = (mode: "SIMULATION" | "LIVE") => {
-    if (mode === "LIVE" && tradingMode === "SIMULATION") {
+  const handleToggleMode = (mode: "BACKTEST" | "LIVE") => {
+    if (mode === "LIVE" && tradingMode === "BACKTEST") {
       setShowLiveModal(true);
       setLiveConfirmInput("");
-    } else if (mode === "SIMULATION" && tradingMode === "LIVE") {
-      setTradingMode("SIMULATION");
+    } else if (mode === "BACKTEST" && tradingMode === "LIVE") {
+      setTradingMode("BACKTEST");
       if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify({ type: "TOGGLE_MODE", mode: "SIMULATION", simBalance }));
+        wsRef.current.send(JSON.stringify({ type: "TOGGLE_MODE", mode: "BACKTEST", simBalance }));
       }
     }
   };
@@ -368,16 +382,16 @@ function App() {
             {isRunning ? 'System Active' : 'System Halted'}
           </div>
           <div className={`mode-badge ${tradingMode.toLowerCase()}`}>
-            {tradingMode === 'SIMULATION' ? 'PAPER TRADING' : 'LIVE TRADING'}
+            {tradingMode === 'BACKTEST' ? 'BACKTESTING' : 'LIVE TRADING'}
           </div>
         </div>
         <div className="controls">
           <div className="mode-toggle">
             <div 
-              className={`mode-toggle-option ${tradingMode === 'SIMULATION' ? 'active sim' : ''}`}
-              onClick={() => handleToggleMode("SIMULATION")}
+              className={`mode-toggle-option ${tradingMode === 'BACKTEST' ? 'active sim' : ''}`}
+              onClick={() => handleToggleMode("BACKTEST")}
             >
-              SIMULATION
+              BACKTEST
             </div>
             <div 
               className={`mode-toggle-option ${tradingMode === 'LIVE' ? 'active live' : ''}`}
@@ -409,6 +423,83 @@ function App() {
         </div>
       </header>
 
+      {tradingMode === 'BACKTEST' && (
+        <div className="glass-panel" style={{ margin: '15px 0', padding: '15px' }}>
+          <div className="panel-title" style={{ color: '#3b82f6', marginBottom: '15px' }}>Backtest Configuration</div>
+          <div style={{ display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px' }}>
+              Start Time: 
+              <input type="datetime-local" value={backtestStart} onChange={e => setBacktestStart(e.target.value)} style={{ padding: '8px', borderRadius: '4px', border: '1px solid #444', background: '#222', color: '#fff' }} />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px' }}>
+              End Time:
+              <input type="datetime-local" value={backtestEnd} onChange={e => setBacktestEnd(e.target.value)} style={{ padding: '8px', borderRadius: '4px', border: '1px solid #444', background: '#222', color: '#fff' }} />
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '5px', fontSize: '12px' }}>
+              Initial Balance ($):
+              <input type="number" value={simBalance} onChange={e => setSimBalance(Number(e.target.value))} style={{ padding: '8px', borderRadius: '4px', border: '1px solid #444', background: '#222', color: '#fff' }} />
+            </label>
+            <button 
+              className="btn btn-start"
+              style={{ marginTop: '16px' }}
+              disabled={backtestStatus === "DOWNLOADING" || backtestStatus === "RUNNING"}
+              onClick={() => {
+                 const s = new Date(backtestStart).getTime();
+                 const e = new Date(backtestEnd).getTime();
+                 if (e <= s) {
+                    alert("End time must be after start time"); return;
+                 }
+                 if (e - s > 31 * 24 * 60 * 60 * 1000) {
+                    alert("Max period is 1 month"); return;
+                 }
+                 setBacktestStatus("IDLE");
+                 setBacktestResults(null);
+                 wsRef.current?.send(JSON.stringify({ type: "RUN_BACKTEST", startTime: s, endTime: e, initialBalance: simBalance }));
+              }}
+            >
+              Run Backtest
+            </button>
+          </div>
+          
+          {backtestStatus !== "IDLE" && (
+            <div style={{ marginTop: '20px', padding: '15px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', borderLeft: '4px solid #3b82f6' }}>
+              <h3 style={{ margin: '0 0 10px 0', fontSize: '14px', color: '#94a3b8' }}>Status: <span style={{ color: '#fff' }}>{backtestStatus}</span></h3>
+              {backtestStatus === "DOWNLOADING" && <p style={{ fontSize: '13px', color: '#eab308' }}>Downloading historical data from Binance... This may take a moment.</p>}
+              {backtestStatus === "ERROR" && <p style={{ fontSize: '13px', color: '#ef4444' }}>Error: {backtestError}</p>}
+              {backtestStatus === "RUNNING" && (
+                <div style={{ marginTop: '10px' }}>
+                   <div style={{ width: '100%', background: '#333', height: '12px', borderRadius: '6px', overflow: 'hidden' }}>
+                     <div style={{ width: `${backtestProgress}%`, background: '#3b82f6', height: '100%', transition: 'width 0.2s' }}></div>
+                   </div>
+                   <p style={{ marginTop: '5px', fontSize: '12px', textAlign: 'right' }}>{backtestProgress.toFixed(1)}%</p>
+                </div>
+              )}
+              {backtestStatus === "COMPLETED" && backtestResults && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '15px', marginTop: '15px' }}>
+                  <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Initial Balance</div>
+                    <div style={{ fontSize: '16px', fontWeight: 'bold' }}>${simBalance.toFixed(2)}</div>
+                  </div>
+                  <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Final Balance (Quote)</div>
+                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: backtestResults.finalQuote >= simBalance ? '#10b981' : '#ef4444' }}>${backtestResults.finalQuote.toFixed(2)}</div>
+                  </div>
+                  <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Total Fees Paid</div>
+                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#eab308' }}>${backtestResults.totalFees.toFixed(2)}</div>
+                  </div>
+                  <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
+                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Net PnL</div>
+                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: backtestResults.finalQuote >= simBalance ? '#10b981' : '#ef4444' }}>
+                      ${(backtestResults.finalQuote - simBalance).toFixed(2)} ({( ((backtestResults.finalQuote - simBalance) / simBalance) * 100 ).toFixed(2)}%)
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
       
       <div className="mm-controls-panel glass-panel" style={{ margin: '8px 0', padding: '12px' }}>
         <div className="panel-title" style={{ marginBottom: '8px' }}>Market Making Telemetry & Tuning</div>
@@ -598,16 +689,16 @@ function App() {
           </div>
           <div className="glass-panel metric-card">
             <div className="panel-title">
-              {tradingMode === 'SIMULATION' ? `Base Inventory (Sim ${telemetry?.baseSymbol || ''})` : `Base Inventory (Live ${telemetry?.baseSymbol || ''})`}
+              {tradingMode === 'BACKTEST' ? `Base Inventory (Sim ${telemetry?.baseSymbol || ''})` : `Base Inventory (Live ${telemetry?.baseSymbol || ''})`}
             </div>
-            <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
+            <div className={`metric-value ${tradingMode === 'BACKTEST' ? 'simulated' : 'positive'}`}>
               {telemetry?.baseBalance !== undefined ? `${telemetry.baseBalance.toFixed(4)} ${telemetry.baseSymbol || ''}` : '--'}
             </div>
           </div>
           <div className="glass-panel metric-card">
             <div className="panel-title">
-              {tradingMode === 'SIMULATION' ? `Quote Balance (Sim ${telemetry?.quoteSymbol || ''})` : `Quote Balance (Live ${telemetry?.quoteSymbol || ''})`}
-              {tradingMode === 'SIMULATION' && (
+              {tradingMode === 'BACKTEST' ? `Quote Balance (Sim ${telemetry?.quoteSymbol || ''})` : `Quote Balance (Live ${telemetry?.quoteSymbol || ''})`}
+              {tradingMode === 'BACKTEST' && (
                 <span className="edit-sim-balance" onClick={() => {
                   setIsEditingSimBalance(!isEditingSimBalance);
                   if (!isEditingSimBalance) setSimBalanceInput(balance?.toString() || simBalance.toString());
@@ -616,8 +707,8 @@ function App() {
                 </span>
               )}
             </div>
-            <div className={`metric-value ${tradingMode === 'SIMULATION' ? 'simulated' : 'positive'}`}>
-              {tradingMode === 'SIMULATION' && isEditingSimBalance ? (
+            <div className={`metric-value ${tradingMode === 'BACKTEST' ? 'simulated' : 'positive'}`}>
+              {tradingMode === 'BACKTEST' && isEditingSimBalance ? (
                 <div className="sim-balance-edit-container">
                   <input 
                     type="number" 

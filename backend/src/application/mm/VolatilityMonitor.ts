@@ -1,7 +1,7 @@
 import { Amount } from "../../domain/valueObjects/Amount";
 import { LocalStateManager } from "../LocalStateManager";
 import { Pair } from "../../domain/valueObjects/Pair";
-
+import { TimeProvider } from "../../infrastructure/TimeProvider";
 export class VolatilityMonitor {
     private readonly WINDOW_MS = 60000; // 60 seconds
     private readonly THRESHOLD = 0.005; // 0.5% standard deviation over mean
@@ -21,7 +21,7 @@ export class VolatilityMonitor {
         if (!midPriceAmount) return 0;
         midPriceAmount.apply((v: number) => mid = v);
         
-        const now = Date.now();
+        const now = TimeProvider.now();
         this.priceHistory.push({ ts: now, price: mid });
         this.priceHistory = this.priceHistory.filter(h => now - h.ts <= this.WINDOW_MS);
 

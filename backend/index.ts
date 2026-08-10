@@ -11,7 +11,9 @@ import { BinanceWsClient } from "./src/infrastructure/BinanceWsClient";
 import { BinancePrecisionFetcher } from "./src/infrastructure/BinancePrecisionFetcher";
 import { SimulationOrderExecutor } from "./src/infrastructure/SimulationOrderExecutor";
 import { SimulationBalanceFetcher } from "./src/infrastructure/SimulationBalanceFetcher";
-
+import { TimeProvider } from "./src/infrastructure/TimeProvider";
+import { BinanceHistoricalDownloader } from "./src/infrastructure/BinanceHistoricalDownloader";
+import { HistoricalPriceIngestor } from "./src/infrastructure/HistoricalPriceIngestor";
 // Market Making components
 import { VolatilityMonitor } from "./src/application/mm/VolatilityMonitor";
 import { LiquidityMonitor } from "./src/application/mm/LiquidityMonitor";
@@ -35,7 +37,7 @@ console.error = (...args) => {
 console.log("🚀 Starting HFT Market Making Engine...");
 
 let isEngineRunning = false;
-let currentMode: "LIVE" | "SIMULATION" = "SIMULATION"; // Default to SIMULATION for safety
+let currentMode: "LIVE" | "SIMULATION" | "BACKTEST" = "SIMULATION"; // Default to SIMULATION for safety
 
 const dbPath = new DatabaseFilePath("./hft.sqlite");
 const db = DatabaseFactory.create(dbPath);
@@ -80,7 +82,7 @@ const fdusd = new Currency("FDUSD");
 const mmPair = new Pair(btc, fdusd);
 
 // --- Mode Switching Logic ---
-function switchMode(newMode: "LIVE" | "SIMULATION", simQuoteBalance?: number) {
+function switchMode(newMode: "LIVE" | "SIMULATION" | "BACKTEST", simQuoteBalance?: number) {
     if (newMode === currentMode) return;
 
     isEngineRunning = false; // Halt engine during switch
@@ -170,7 +172,7 @@ async function startHftEngine() {
 
     // Main MM Loop driven by time (continuous quoting) instead of ticks
     async function runMarketMakerLoop() {
-        if (!isEngineRunning) {
+        if (!isEngineRunning || currentMode === "BACKTEST") {
             setTimeout(runMarketMakerLoop, 2000);
             return;
         }
@@ -255,6 +257,8 @@ const server = Bun.serve({
             if (data.type === "TOGGLE_ENGINE") {
                 isEngineRunning = data.running === true;
                 console.log(`Engine running state: ${isEngineRunning ? 'ACTIVE 🟢' : 'HALTED 🔴'}`);
+            } else if (data.type === "RUN_BACKTEST") {
+                executeBacktest(data.startTime, data.endTime, data.initialBalance).catch(console.error);
             } else if (data.type === "TOGGLE_MODE") {
                 const newMode = data.mode === "LIVE" ? "LIVE" : "SIMULATION";
                 switchMode(newMode, data.simBalance);
@@ -428,3 +432,88 @@ setInterval(() => {
 }, 1000);
 
 console.log(`🌐 WebSocket Server for Dashboard running on ws://localhost:${server.port}`);
+
+async function executeBacktest(startTime: number, endTime: number, initialBalance: number) {
+    if (isEngineRunning && currentMode === "LIVE") {
+        console.log("Cannot start backtest while engine is running in LIVE mode.");
+        return;
+    }
+    
+    switchMode("BACKTEST");
+    console.log(`🧪 Starting BACKTEST mode from ${new Date(startTime).toISOString()} to ${new Date(endTime).toISOString()}`);
+    
+    // Clear previous simulation data
+    TimeProvider.clearVirtualTime();
+    simExecutor.setInitialBalances(0, initialBalance);
+    simExecutor.totalFeesCollected = 0;
+    
+    const downloader = new BinanceHistoricalDownloader();
+    let ticks: any[];
+    try {
+        server.publish("dashboard", JSON.stringify({ type: "BACKTEST_STATUS", status: "DOWNLOADING" }));
+        let symbol = "";
+        mmPair.applyBinanceSymbol(s => symbol = s);
+        ticks = await downloader.downloadKlinesAsTicks(symbol, startTime, endTime);
+    } catch (err: any) {
+        server.publish("dashboard", JSON.stringify({ type: "BACKTEST_STATUS", status: "ERROR", message: err.message }));
+        return;
+    }
+    
+    server.publish("dashboard", JSON.stringify({ type: "BACKTEST_STATUS", status: "RUNNING" }));
+    const histIngestor = new HistoricalPriceIngestor();
+    histIngestor.subscribe(mmPair);
+    
+    histIngestor.onTick((tick) => {
+        stateManager.updateState(tick);
+    });
+
+    let lastMMLoop = 0;
+
+    for (let i = 0; i < ticks.length; i++) {
+        const rawTick = ticks[i];
+        histIngestor.emitHistoricalTick(rawTick);
+        
+        inventoryManager.baseBalance = simExecutor.baseBalance;
+        inventoryManager.quoteBalance = simExecutor.quoteBalance;
+
+        // Run MM loop every 2s of virtual time
+        if (TimeProvider.now() - lastMMLoop >= 2000) {
+            let quoteSym = "";
+            let baseSym = "";
+            mmPair.applyCurrencies((b, q) => {
+                b.applySymbol(s => baseSym = s.toUpperCase());
+                q.applySymbol(s => quoteSym = s.toUpperCase());
+            });
+            const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
+            const isZeroFeePromo = quoteSym === "FDUSD" && zeroFeePromoBases.includes(baseSym);
+            const feeRate = isZeroFeePromo ? 0 : 0.001;
+            const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
+            const currentK = tradeIntensityMonitor.getK(mmPair);
+            
+            await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK);
+            lastMMLoop = TimeProvider.now();
+        }
+        
+        if (i % 1000 === 0) {
+            await new Promise(r => setImmediate(r));
+            server.publish("dashboard", JSON.stringify({
+                type: "BACKTEST_PROGRESS",
+                progress: (i / ticks.length) * 100,
+                virtualTime: TimeProvider.now(),
+                baseBalance: simExecutor.baseBalance,
+                quoteBalance: simExecutor.quoteBalance,
+            }));
+        }
+    }
+    
+    TimeProvider.clearVirtualTime();
+    server.publish("dashboard", JSON.stringify({ 
+        type: "BACKTEST_STATUS", 
+        status: "COMPLETED",
+        finalBase: simExecutor.baseBalance,
+        finalQuote: simExecutor.quoteBalance,
+        totalFees: simExecutor.totalFeesCollected
+    }));
+    
+    console.log(`✅ Backtest completed! Final Quote: ${simExecutor.quoteBalance}`);
+}

@@ -5,6 +5,7 @@ import { LocalStateManager } from "../LocalStateManager";
 import { CircuitBreaker } from "./CircuitBreaker";
 import { InventoryManager } from "./InventoryManager";
 import { BinanceUserDataStream, ExecutionReport } from "../../infrastructure/BinanceUserDataStream";
+import { TimeProvider } from "../../infrastructure/TimeProvider";
 
 export class MarketMakerCycle {
     public lotConfig: { mode: "PERCENTAGE" | "FIXED", value: number } = { mode: "PERCENTAGE", value: 0.05 };
@@ -113,7 +114,7 @@ export class MarketMakerCycle {
         if (!order) return true; // Already clear
         
         const priceDeviation = Math.abs(order.price - newTargetPrice) / newTargetPrice;
-        const age = Date.now() - order.timestamp;
+        const age = TimeProvider.now() - order.timestamp;
         
         if (priceDeviation > this.TOLERANCE_PCT || age > this.MAX_ORDER_AGE_MS) {
             await this.executor.cancelOrder(order);
@@ -230,7 +231,7 @@ export class MarketMakerCycle {
                 
                 if (meetsMin && hasBalance) {
                     const quoteToSpend = new Amount(buyLevelQuote); 
-                    this.activeBuyOrders[i] = { orderId: "-1", symbol: "", side: "BUY", price: targetBid, qty: buyLevelQuote / targetBid, timestamp: Date.now() }; // Optimistic lock
+                    this.activeBuyOrders[i] = { orderId: "-1", symbol: "", side: "BUY", price: targetBid, qty: buyLevelQuote / targetBid, timestamp: TimeProvider.now() }; // Optimistic lock
                     promises.push(
                         this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(targetBid))
                         .then(order => { 
@@ -251,7 +252,7 @@ export class MarketMakerCycle {
                 
                 if (meetsMin && hasBalance) {
                     const baseToSell = new Amount(sellLevelBase);
-                    this.activeSellOrders[i] = { orderId: "-1", symbol: "", side: "SELL", price: targetAsk, qty: sellLevelBase, timestamp: Date.now() }; // Optimistic lock
+                    this.activeSellOrders[i] = { orderId: "-1", symbol: "", side: "SELL", price: targetAsk, qty: sellLevelBase, timestamp: TimeProvider.now() }; // Optimistic lock
                     promises.push(
                         this.executor.executeMakerSell(pair, baseToSell, new Amount(targetAsk))
                         .then(order => { 
@@ -274,7 +275,7 @@ export class MarketMakerCycle {
 
     private lastStuckLog = 0;
     private logStuck(message: string) {
-        const now = Date.now();
+        const now = TimeProvider.now();
         if (now - this.lastStuckLog > 60000) { // Log once per minute max
             console.log(`\n🛑 [DIAGNOSTIC] ${message}`);
             
