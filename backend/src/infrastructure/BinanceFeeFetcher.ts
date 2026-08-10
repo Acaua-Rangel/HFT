@@ -59,12 +59,16 @@ export class BinanceFeeFetcher implements FeeFetcher {
       const data: any = await response.json();
       if (Array.isArray(data)) {
         for (const item of data) {
-          if (item.symbol && item.makerCommission) {
-            let feeVal = parseFloat(item.makerCommission);
-            if (item.symbol.toUpperCase().includes("FDUSD")) {
-              feeVal = 0;
+          // A taxa vem da exchange e é aceita como está — inclusive "0", que é o valor
+          // real de pares em promoção (confirmado para BTCFDUSD, e coerente com a
+          // comissão efetivamente cobrada nos fills). Antes havia um override que forçava
+          // 0 para qualquer símbolo contendo "FDUSD": acertava por acaso hoje, e
+          // silenciaria o fim da promoção amanhã.
+          if (item.symbol && item.makerCommission !== undefined && item.makerCommission !== null) {
+            const feeVal = parseFloat(item.makerCommission);
+            if (Number.isFinite(feeVal)) {
+              this.cache.set(item.symbol.toUpperCase(), new Fee(new Amount(feeVal)));
             }
-            this.cache.set(item.symbol.toUpperCase(), new Fee(new Amount(feeVal)));
           }
         }
       }
@@ -111,13 +115,12 @@ export class BinanceFeeFetcher implements FeeFetcher {
           let makerFee = 0.001;
           if (Array.isArray(data) && data.length > 0) {
             makerFee = parseFloat(data[0].makerCommission);
-          } else if (data.makerCommission) {
+          } else if (data.makerCommission !== undefined && data.makerCommission !== null) {
             makerFee = parseFloat(data.makerCommission);
           }
-          if (symbol.toUpperCase().includes("FDUSD")) {
-            makerFee = 0;
+          if (Number.isFinite(makerFee)) {
+            this.cache.set(symbol, new Fee(new Amount(makerFee)));
           }
-          this.cache.set(symbol, new Fee(new Amount(makerFee)));
         }
       } catch (e) {
         // Silent catch for background update

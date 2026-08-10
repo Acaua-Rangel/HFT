@@ -24,6 +24,7 @@ import { ExecutionLock } from "./src/application/ExecutionLock";
 import { BinanceUserDataStream } from "./src/infrastructure/BinanceUserDataStream";
 import { TradeIntensityMonitor } from "./src/application/mm/TradeIntensityMonitor";
 import { RiskManager } from "./src/application/mm/RiskManager";
+import { BinanceFeeFetcher } from "./src/infrastructure/BinanceFeeFetcher";
 
 const latestErrors: string[] = [];
 const originalConsoleError = console.error;
@@ -84,6 +85,32 @@ const btc = new Currency("BTC");
 const fdusd = new Currency("FDUSD");
 const mmPair = new Pair(btc, fdusd);
 
+// --- Taxa maker efetiva ---
+// Lida da exchange, não de uma lista hardcoded. A versão anterior assumia promo de taxa
+// zero para pares FDUSD a partir de uma lista fixa de bases; se a Binance encerrar a promo,
+// o piso de spread (2 × feeRate × 1.5) vira zero e o bot passa a cotar abaixo do custo de
+// round-trip sem nenhum sinal. Aqui a taxa é consultada e revalidada periodicamente.
+const feeFetcher = new BinanceFeeFetcher();
+let currentMakerFee = 0.001; // default conservador até a primeira leitura
+
+async function refreshMakerFee(): Promise<void> {
+    try {
+        await feeFetcher.preloadFees([mmPair]);
+        let fetched = currentMakerFee;
+        feeFetcher.getFeeFor(mmPair).percentage.apply(v => fetched = v);
+
+        if (fetched !== currentMakerFee) {
+            console.log(`💰 Taxa maker atualizada: ${(currentMakerFee * 100).toFixed(4)}% → ${(fetched * 100).toFixed(4)}%`);
+            if (fetched > currentMakerFee) {
+                console.warn(`⚠️ A taxa SUBIU. O piso de spread agora exige ${(fetched * 2 * 1.5 * 100).toFixed(4)}% para cobrir o round-trip.`);
+            }
+            currentMakerFee = fetched;
+        }
+    } catch (err) {
+        console.warn("⚠️ Falha ao ler a taxa maker; mantendo o último valor conhecido.", err);
+    }
+}
+
 // --- Mode Switching Logic ---
 function switchMode(newMode: "LIVE" | "BACKTEST", simQuoteBalance?: number) {
     if (newMode === currentMode) return;
@@ -116,6 +143,11 @@ async function startHftEngine() {
     ingestor.subscribe(mmPair);
     
     await precisionFetcher.preloadPrecisions();
+
+    // Taxa real antes de qualquer cotação, e revalidação de hora em hora.
+    await refreshMakerFee();
+    console.log(`💰 Taxa maker efetiva: ${(currentMakerFee * 100).toFixed(4)}% (round-trip: ${(currentMakerFee * 2 * 100).toFixed(4)}%)`);
+    setInterval(() => { refreshMakerFee().catch(() => {}); }, 3600000);
 
 
 
@@ -182,20 +214,15 @@ async function startHftEngine() {
 
         await evaluationLock.runIfUnlocked(async () => {
             try {
-                // Binance Zero Maker Fee Promotion for specific FDUSD pairs
-                let quoteSym = "";
-                let baseSym = "";
-                mmPair.applyCurrencies((b, q) => {
-                    b.applySymbol(s => baseSym = s.toUpperCase());
-                    q.applySymbol(s => quoteSym = s.toUpperCase());
-                });
-                
-                const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
-                const isZeroFeePromo = quoteSym === "FDUSD" && zeroFeePromoBases.includes(baseSym);
-                
-                const feeRate = isZeroFeePromo ? 0 : 0.001;
+                const feeRate = currentMakerFee;
+                const isZeroFeePromo = feeRate === 0;
+
+                // Amostra a volatilidade uma única vez por ciclo. O getter é puro; quem
+                // coleta é o record(). Antes o getter mutava o histórico e era chamado
+                // 2–3× por ciclo, então a estimativa dependia da contagem de chamadas.
+                volatilityMonitor.record(mmPair);
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
-                
+
                 // Fetch current midPrice
                 let midPrice = 0;
                 const book = stateManager.retrieveOrderBook(mmPair);
@@ -351,10 +378,9 @@ setInterval(() => {
     mmPair.applyBinanceSymbol(s => pairSymbol = s);
     const minNotional = precisionFetcher.getMinNotional(pairSymbol);
 
-    const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
-    const isZeroFeePromo = quoteSym === "FDUSD" && zeroFeePromoBases.includes(baseSym);
-    
-    const feeRate = isZeroFeePromo ? 0 : 0.001;
+    const feeRate = currentMakerFee;
+    const isZeroFeePromo = feeRate === 0;
+    // Telemetria só lê; a coleta acontece no ciclo de market making.
     const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
 
     // Get top of book prices
@@ -390,6 +416,8 @@ setInterval(() => {
         }
     }
 
+    const cooldown = mmCycle.getCooldownRemainingMs();
+
     server.publish("dashboard", JSON.stringify({
         type: "TELEMETRY",
         mode: currentMode,
@@ -424,6 +452,7 @@ setInterval(() => {
         bestBid,
         bestAsk,
         isZeroFee: isZeroFeePromo,
+        feeRate: currentMakerFee,
         safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
         absoluteMinSpread: inventoryManager.ABSOLUTE_MIN_SPREAD,
         intensityK: tradeIntensityMonitor.getK(mmPair),
@@ -433,7 +462,9 @@ setInterval(() => {
         activeBuyCount,
         activeBuyValue,
         activeSellCount,
-        activeSellValue
+        activeSellValue,
+        buyCooldownMs: cooldown.buy,
+        sellCooldownMs: cooldown.sell
     }));
 }, 1000);
 
@@ -467,6 +498,14 @@ async function executeBacktest(startTime: number, endTime: number, initialBalanc
     
     server.publish("dashboard", JSON.stringify({ type: "BACKTEST_STATUS", status: "RUNNING" }));
     const histIngestor = new HistoricalPriceIngestor();
+    // Book sintético calibrado com a precisão real do símbolo, em vez do spread fixo de
+    // 0,01% que era ~645× mais largo que o book verdadeiro do BTCFDUSD.
+    let btSymbolForBook = "";
+    mmPair.applyBinanceSymbol(s => btSymbolForBook = s);
+    histIngestor.configureBook({
+        tickSize: precisionFetcher.getPriceTickSize(btSymbolForBook),
+        levelDepthQuote: simExecutor.queueAheadQuote,
+    });
     histIngestor.subscribe(mmPair);
     
     histIngestor.onTick((tick) => {
@@ -491,21 +530,15 @@ async function executeBacktest(startTime: number, endTime: number, initialBalanc
             if (tickObj) {
                 tickObj.applyTopBid((l) => { if (l) l.price.apply(v => bestBid = v); });
                 tickObj.applyTopAsk((l) => { if (l) l.price.apply(v => bestAsk = v); });
-                simExecutor.evaluateFills(bestBid, bestAsk, rawTick.volume);
+                simExecutor.evaluateFills(bestBid, bestAsk, rawTick.volume, rawTick.low, rawTick.high);
             }
         }
 
         // Run MM loop every 2s of virtual time
         if (TimeProvider.now() - lastMMLoop >= 2000) {
-            let quoteSym = "";
-            let baseSym = "";
-            mmPair.applyCurrencies((b, q) => {
-                b.applySymbol(s => baseSym = s.toUpperCase());
-                q.applySymbol(s => quoteSym = s.toUpperCase());
-            });
-            const zeroFeePromoBases = ['BTC', 'BNB', 'DOGE', 'ETH', 'LINK', 'SOL', 'XRP'];
-            const isZeroFeePromo = quoteSym === "FDUSD" && zeroFeePromoBases.includes(baseSym);
-            const feeRate = isZeroFeePromo ? 0 : 0.001;
+            const feeRate = currentMakerFee;
+            const isZeroFeePromo = feeRate === 0;
+            volatilityMonitor.record(mmPair);
             const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
             const currentK = tradeIntensityMonitor.getK(mmPair);
 

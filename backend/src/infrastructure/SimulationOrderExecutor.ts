@@ -28,6 +28,13 @@ export class SimulationOrderExecutor implements OrderExecutor {
     private readonly BASE_FEE_RATE = 0.001;   // 0.1%
     public totalFeesCollected: number = 0;     // Track total fees for telemetry
 
+    /**
+     * Notional (na moeda quote) que assumimos estar descansando à nossa frente na fila do
+     * nível em que colocamos a ordem. Calibrar contra a profundidade real do book do par:
+     * para BTCFDUSD medimos algumas centenas de FDUSD por nível no topo.
+     */
+    public queueAheadQuote: number = 500;
+
     constructor(
         private readonly errorLogger: ErrorLogRepository,
         private readonly transactionRepo: TransactionRepository,
@@ -107,35 +114,62 @@ export class SimulationOrderExecutor implements OrderExecutor {
         console.log(`🧹 [SIM] Canceled all open orders for ${symbol}.`);
     }
 
-    public evaluateFills(bestBid: number, bestAsk: number, tickVolume: number = 0): void {
+    /**
+     * Avalia execuções contra uma barra do histórico.
+     *
+     * @param barLow  mínima da barra; se ausente, cai para bestBid (modelo antigo, pior)
+     * @param barHigh máxima da barra
+     * @param tickVolume volume da barra em unidades do ativo BASE
+     *
+     * Duas correções sobre o modelo anterior, ambas motivadas pela medição do book real:
+     *
+     * 1. **Varredura intrabar.** Antes só o close era considerado, então uma barra que
+     *    negociou abaixo do nosso bid e voltou não gerava execução. Agora a mínima/máxima
+     *    da barra decide se o preço realmente atravessou nosso preço.
+     *
+     * 2. **Fila.** Antes a fila drenava a 15% do volume total da barra sempre que o preço
+     *    "tocava", sem distinguir de que lado veio o fluxo nem a que distância do topo
+     *    estávamos. Agora só drena quando estamos no topo, e apenas com a fração do fluxo
+     *    que bate no nosso lado.
+     */
+    public evaluateFills(
+        bestBid: number,
+        bestAsk: number,
+        tickVolume: number = 0,
+        barLow?: number,
+        barHigh?: number
+    ): void {
         const toDelete: string[] = [];
 
+        // Metade do fluxo agride o nosso lado do book (vendas batem em bids, compras em
+        // asks). O 0.15 anterior era arbitrário e aplicado sobre o volume total.
+        const SIDE_SHARE = 0.5;
+
+        const low = barLow !== undefined && barLow > 0 ? barLow : bestBid;
+        const high = barHigh !== undefined && barHigh > 0 ? barHigh : bestAsk;
+
         for (const [orderId, simData] of this.activeOrders.entries()) {
-            const { order, pair, amountVal, truncatedQty } = simData;
-            
+            const { order, pair, truncatedQty } = simData;
+
             let filled = false;
             const orderAge = TimeProvider.now() - order.timestamp;
-            
+
             // Require order to sit for at least 100ms (latency simulation)
             if (orderAge >= 100) {
                 if (order.side === "BUY") {
-                    // Crossing: Market traded completely past our order
-                    if (bestAsk > 0 && bestAsk < order.price) {
+                    if (low > 0 && low < order.price) {
+                        // O mercado negociou ABAIXO do nosso limite: fomos varridos.
                         filled = true;
-                    } 
-                    // Touching: Market reached our price, simulate queue depletion
-                    else if (bestBid > 0 && bestBid <= order.price || bestAsk > 0 && bestAsk <= order.price) {
-                        simData.queuePosition -= (tickVolume * 0.15); // Assume 15% of tick volume hits our side
+                    } else if (low > 0 && low <= order.price && bestBid > 0 && order.price >= bestBid) {
+                        // Estamos no topo do book e o preço encostou: drena a fila.
+                        simData.queuePosition -= tickVolume * SIDE_SHARE;
                         if (simData.queuePosition <= 0) filled = true;
                     }
                 } else {
-                    // Crossing: Market traded completely past our order
-                    if (bestBid > 0 && bestBid > order.price) {
+                    if (high > 0 && high > order.price) {
                         filled = true;
-                    }
-                    // Touching: Market reached our price, simulate queue depletion
-                    else if (bestAsk > 0 && bestAsk >= order.price || bestBid > 0 && bestBid >= order.price) {
-                        simData.queuePosition -= (tickVolume * 0.15); // Assume 15% of tick volume hits our side
+                    } else if (high > 0 && high >= order.price && bestAsk > 0 && order.price <= bestAsk) {
+                        simData.queuePosition -= tickVolume * SIDE_SHARE;
                         if (simData.queuePosition <= 0) filled = true;
                     }
                 }
@@ -278,8 +312,15 @@ export class SimulationOrderExecutor implements OrderExecutor {
             timestamp: TimeProvider.now()
         };
 
-        // Estimate initial queue size deterministically (max between 3x our order size or $10k equivalent in base asset)
-        const minBaseQueue = 10000 / roundedPrice;
+        // Fila à nossa frente, em unidades do ativo base.
+        //
+        // Antes eram US$ 10.000 fixos por nível. Medindo o BTCFDUSD real, a profundidade
+        // por nível no topo do book gira em algumas centenas de FDUSD — a fila antiga era
+        // ~20× mais funda do que a realidade em cima, o que por si só travaria execuções;
+        // mas combinada com um dreno de 15% do volume total da barra a cada toque, o
+        // resultado líquido era otimista demais. Agora a estimativa é explícita e
+        // configurável, para poder ser calibrada contra fills reais.
+        const minBaseQueue = this.queueAheadQuote / roundedPrice;
         const initialQueuePosition = Math.max(truncatedQty * 3, minBaseQueue);
 
         this.activeOrders.set(activeOrder.orderId, { 

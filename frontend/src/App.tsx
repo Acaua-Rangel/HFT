@@ -510,7 +510,7 @@ function App() {
               <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                 <span style={{ display: 'flex', alignItems: 'center' }}>
                   Gamma (Risk Aversion):
-                  <InfoTooltip text="Controla quão agressivo o robô é ao proteger o inventário. Valores altos (ex: 0.5) puxam o preço de reserva fortemente, dificultando comprar mais se já tivermos muito estoque." />
+                  <InfoTooltip text="Contribui, de forma limitada, para o spread cotado (termo de Avellaneda-Stoikov). Não desloca mais o preço de reserva — o controle real de estoque hoje é por TAMANHO de ordem (veja Effective Buy/Sell Lot abaixo): quanto mais comprado, menor o lote de compra e maior o de venda." />
                 </span>
                 <strong>{gamma}</strong>
               </label>
@@ -755,7 +755,7 @@ function App() {
               {telemetry?.effectiveSpread !== undefined ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
                   <span style={{ color: '#94a3b8' }}>
-                    Vol: {telemetry.volatilityPct !== undefined ? `${(telemetry.volatilityPct * 100).toFixed(4)}%` : '--'}
+                    Vol (30s): {telemetry.volatilityPct !== undefined ? `${(telemetry.volatilityPct * 100).toFixed(4)}%` : '--'}
                     {telemetry.safetyMultiplier !== undefined ? ` × ${telemetry.safetyMultiplier}σ` : ''}
                   </span>
                   <span style={{ color: '#3b82f6', fontWeight: 'bold', fontSize: '14px' }}>
@@ -768,6 +768,25 @@ function App() {
               ) : '--'}
             </div>
           </div>
+          <div className="glass-panel metric-card">
+            <div className="panel-title" style={{ display: 'flex', alignItems: 'center' }}>
+              Maker Fee (Live)
+              <InfoTooltip text="Taxa maker lida direto da Binance (não de uma lista fixa por par), revalidada de hora em hora. Se subir, o piso de spread por taxa (2× a taxa × 1.5) sobe junto — fique atento se este valor deixar de ser 0%." />
+            </div>
+            <div className="metric-value" style={{ fontSize: '16px' }}>
+               {telemetry?.feeRate !== undefined ? (
+                 <div style={{ display: 'flex', flexDirection: 'column' }}>
+                   <span style={{ fontWeight: 'bold', color: telemetry.feeRate === 0 ? 'var(--color-up)' : '#eab308' }}>
+                     {(telemetry.feeRate * 100).toFixed(4)}%
+                   </span>
+                   <span style={{ color: '#94a3b8', fontSize: '11px' }}>
+                     round-trip: {(telemetry.feeRate * 2 * 100).toFixed(4)}%
+                   </span>
+                 </div>
+               ) : '--'}
+            </div>
+          </div>
+
           <div className="glass-panel metric-card">
             <div className="panel-title">Total Wealth (Est. {telemetry?.quoteSymbol || 'Quote'})</div>
             <div className="metric-value" style={{ color: '#3b82f6' }}>
@@ -794,7 +813,10 @@ function App() {
           </div>
           
           <div className="glass-panel metric-card" style={{ borderRight: (telemetry?.hangingOrdersCount ?? 0) > 0 ? '4px solid #f59e0b' : 'none' }}>
-            <div className="panel-title">Hanging Orders (Ping-Pong)</div>
+            <div className="panel-title" style={{ display: 'flex', alignItems: 'center' }}>
+              Hanging Orders
+              <InfoTooltip text="Ordens que ficaram fora do ciclo normal de cotação. O mecanismo de ping-pong (que gerava uma ordem oposta automática a cada fill) foi removido; hoje só existem se algo externo deixar uma ordem presa, e são expiradas por idade (10min) ou distância do preço (1%). Em operação normal deve ficar em 0." />
+            </div>
             <div className="metric-value" style={{ fontSize: '14px', lineHeight: '1.4' }}>
                {telemetry?.hangingOrdersCount !== undefined ? (
                  <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -802,7 +824,7 @@ function App() {
                      {telemetry.hangingOrdersCount} Orders
                    </span>
                    <span style={{ color: '#94a3b8', fontSize: '12px' }}>
-                     {telemetry.hangingOrdersValue > 0 ? `$${telemetry.hangingOrdersValue.toFixed(2)} Total` : 'No capital trapped'}
+                     {telemetry.hangingOrdersValue > 0 ? `$${telemetry.hangingOrdersValue.toFixed(2)} Total` : 'None (expected)'}
                    </span>
                  </div>
                ) : '--'}
@@ -810,7 +832,10 @@ function App() {
           </div>
 
           <div className="glass-panel metric-card">
-            <div className="panel-title">Active Memory Orders</div>
+            <div className="panel-title" style={{ display: 'flex', alignItems: 'center' }}>
+              Active Memory Orders
+              <InfoTooltip text="Após um fill, o lado correspondente fica em cooldown (filled_order_delay) antes de recotar — é intencional, não um travamento. Um lado sem ordem aberta e sem cooldown ativo pode indicar saldo insuficiente ou o lado desabilitado pelo Max Inventory Skew." />
+            </div>
             <div className="metric-value" style={{ fontSize: '12px', lineHeight: '1.6' }}>
                {telemetry?.activeBuyCount !== undefined ? (
                  <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
@@ -822,6 +847,12 @@ function App() {
                      <span>{telemetry.activeSellCount} Sells Open</span>
                      <strong>${telemetry.activeSellValue?.toFixed(2)}</strong>
                    </div>
+                   {((telemetry.buyCooldownMs ?? 0) > 0 || (telemetry.sellCooldownMs ?? 0) > 0) && (
+                     <div style={{ marginTop: '2px', paddingTop: '4px', borderTop: '1px solid rgba(255,255,255,0.1)', color: '#f59e0b', fontSize: '11px' }}>
+                       {(telemetry.buyCooldownMs ?? 0) > 0 && <div>⏳ Buy cooldown: {Math.ceil(telemetry.buyCooldownMs / 1000)}s</div>}
+                       {(telemetry.sellCooldownMs ?? 0) > 0 && <div>⏳ Sell cooldown: {Math.ceil(telemetry.sellCooldownMs / 1000)}s</div>}
+                     </div>
+                   )}
                  </div>
                ) : '--'}
             </div>

@@ -3,8 +3,15 @@ import * as path from 'path';
 
 export interface HistoricalTickData {
     timestamp: number;
+    /** Preço de fechamento da barra. */
     price: number;
+    /** Volume em unidades do ativo base. */
     volume: number;
+    /** Máxima da barra. Sem ela, varreduras intrabar ficam invisíveis. */
+    high: number;
+    /** Mínima da barra. */
+    low: number;
+    open: number;
 }
 
 export class BinanceHistoricalDownloader {
@@ -23,7 +30,9 @@ export class BinanceHistoricalDownloader {
             throw new Error(`Requested period exceeds maximum allowed of 31 days.`);
         }
 
-        const cacheFile = path.join(this.dataDir, `${symbol}_${startTime}_${endTime}.json`);
+        // v2: o cache v1 guardava apenas close+volume. Reaproveitá-lo deixaria high/low
+        // como undefined e o simulador cairia silenciosamente no modelo antigo.
+        const cacheFile = path.join(this.dataDir, `${symbol}_${startTime}_${endTime}_v2.json`);
         
         if (fs.existsSync(cacheFile)) {
             console.log(`📦 Loading historical data from cache: ${cacheFile}`);
@@ -56,13 +65,16 @@ export class BinanceHistoricalDownloader {
 
                 for (const kline of data) {
                     const klineTime = kline[0] as number;
-                    // Use close price to represent the tick, and volume.
-                    // For more fidelity, one could generate 4 ticks (O, H, L, C)
-                    // but 1s resolution is already very high.
+                    // O/H/L/C completos. Usar só o close esconde toda varredura intrabar:
+                    // uma ordem de compra a P é executada se o preço NEGOCIOU abaixo de P
+                    // dentro da barra, mesmo que tenha fechado acima.
                     ticks.push({
                         timestamp: klineTime,
-                        price: parseFloat(kline[4]), // Close Price
-                        volume: parseFloat(kline[5]) // Base Volume
+                        open: parseFloat(kline[1]),
+                        high: parseFloat(kline[2]),
+                        low: parseFloat(kline[3]),
+                        price: parseFloat(kline[4]),
+                        volume: parseFloat(kline[5])
                     });
                 }
 

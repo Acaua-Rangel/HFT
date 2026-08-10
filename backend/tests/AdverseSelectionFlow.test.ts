@@ -11,6 +11,7 @@ import { Tick } from "../src/domain/valueObjects/Tick";
 import { Amount } from "../src/domain/valueObjects/Amount";
 import { OrderExecutor } from "../src/domain/interfaces/OrderExecutor";
 import { OrderFill } from "../src/domain/valueObjects/OrderFill";
+import { TimeProvider } from "../src/infrastructure/TimeProvider";
 
 describe("Adverse Selection Flow Test (Toxic Flow Protection)", () => {
     test("Should protect against falling knife and enforce TTL constraints", async () => {
@@ -39,7 +40,15 @@ describe("Adverse Selection Flow Test (Toxic Flow Protection)", () => {
             }
             canExecuteBatch(count: number): boolean { return true; }
             async cancelOrder(order: any): Promise<OrderFill> { return OrderFill.failed(); }
+            async cancelAllOrders(_pair: Pair): Promise<void> {}
+            logError(_type: string, _message: string): void {}
         }
+
+        // Tempo virtual: o VolatilityMonitor normaliza os retornos por dt, então as
+        // amostras precisam de intervalos reais entre si.
+        let clock = 1_700_000_000_000;
+        const advance = (ms = 1000) => { clock += ms; TimeProvider.setVirtualTime(clock); };
+        TimeProvider.setVirtualTime(clock);
         
         const mockExecutor = new MockExecutor();
         const executeMakerBuySpy = spyOn(mockExecutor, "executeMakerBuy");
@@ -55,7 +64,8 @@ describe("Adverse Selection Flow Test (Toxic Flow Protection)", () => {
                 [{ price: new Amount(60000), qty: new Amount(1) }]
             );
             stateManager.updateState(tick);
-            volatilityMonitor.getVolatilityPercentage(pair);
+            volatilityMonitor.record(pair);
+            advance();
         }
         
         const normalVol = volatilityMonitor.getVolatilityPercentage(pair);
@@ -78,7 +88,8 @@ describe("Adverse Selection Flow Test (Toxic Flow Protection)", () => {
                 [{ price: new Amount(currentPrice), qty: new Amount(1) }]
             );
             stateManager.updateState(tick);
-            volatilityMonitor.getVolatilityPercentage(pair);
+            volatilityMonitor.record(pair);
+            advance();
         }
         
         const crashVol = volatilityMonitor.getVolatilityPercentage(pair);
@@ -109,7 +120,9 @@ describe("Adverse Selection Flow Test (Toxic Flow Protection)", () => {
             [{ price: new Amount(currentPrice), qty: new Amount(1) }]
         );
         stateManager.updateState(extremeTick);
-        
+        volatilityMonitor.record(pair);
+        advance();
+
         const extremeVol = volatilityMonitor.getVolatilityPercentage(pair);
         expect(extremeVol).toBeGreaterThan(0.005); // Above 0.5% threshold
         
@@ -120,5 +133,7 @@ describe("Adverse Selection Flow Test (Toxic Flow Protection)", () => {
         await cycle.executeTick(pair, 0, extremeVol, true);
         expect(executeMakerBuySpy).not.toHaveBeenCalled();
         expect(executeMakerSellSpy).not.toHaveBeenCalled();
+
+        TimeProvider.clearVirtualTime();
     });
 });

@@ -29,7 +29,30 @@ export class MarketMakerCycle {
     private readonly MIN_TOLERANCE_PCT = 0.0005;    // piso da tolerância de desvio de preço
     private lastRefreshAt = 0;
 
-    private readonly PING_PONG_SPREAD = 0.001; // 0.1% minimum profit for ping-pong
+    /**
+     * Após um fill, esperamos antes de recotar aquele lado (Hummingbot: filled_order_delay,
+     * default 60s). Substitui o antigo ping-pong, que disparava automaticamente uma ordem
+     * oposta a 0,1% do preço de execução. O ping-pong nunca foi validado com dados e
+     * competia com o ciclo normal de cotação: como suas ordens ficavam mais perto do mid
+     * que as principais, capturavam preferencialmente o fluxo.
+     */
+    private readonly FILLED_ORDER_DELAY_MS = 60000;
+    private buyBlockedUntil = 0;
+    private sellBlockedUntil = 0;
+
+    /**
+     * Milissegundos restantes de cooldown pós-fill por lado (0 se não bloqueado).
+     * Existe para a telemetria: sem isso, um lado que simplesmente está esperando o
+     * filled_order_delay passar é indistinguível, no dashboard, de um lado travado por
+     * saldo insuficiente — os dois aparentam "não está cotando".
+     */
+    public getCooldownRemainingMs(): { buy: number; sell: number } {
+        const now = TimeProvider.now();
+        return {
+            buy: Math.max(0, this.buyBlockedUntil - now),
+            sell: Math.max(0, this.sellBlockedUntil - now),
+        };
+    }
 
     // Id sentinela do lock otimista: a ordem foi reservada localmente mas ainda não existe
     // na exchange. Nunca pode ser enviada para cancelOrder — a Binance exige orderId
@@ -57,56 +80,28 @@ export class MarketMakerCycle {
     }
 
     private async handleOrderFilled(report: ExecutionReport): Promise<void> {
-        let isBuy = true;
-        let isHanging = false;
+        const matches = (o: ActiveOrder | null | undefined): boolean =>
+            !!o && (o.orderId === report.clientOrderId || o.orderId === report.orderId.toString());
 
-        // Clean from active arrays
         for (let i = 0; i < this.activeBuyOrders.length; i++) {
-            if (this.activeBuyOrders[i]?.orderId === report.clientOrderId || this.activeBuyOrders[i]?.orderId === report.orderId.toString()) {
-                this.activeBuyOrders[i] = null;
-                isBuy = true;
-                isHanging = false;
-            }
+            if (matches(this.activeBuyOrders[i])) this.activeBuyOrders[i] = null;
         }
         for (let i = 0; i < this.activeSellOrders.length; i++) {
-            if (this.activeSellOrders[i]?.orderId === report.clientOrderId || this.activeSellOrders[i]?.orderId === report.orderId.toString()) {
-                this.activeSellOrders[i] = null;
-                isBuy = false;
-                isHanging = false;
-            }
+            if (matches(this.activeSellOrders[i])) this.activeSellOrders[i] = null;
         }
+        this.hangingBuyOrders = this.hangingBuyOrders.filter(o => !matches(o));
+        this.hangingSellOrders = this.hangingSellOrders.filter(o => !matches(o));
 
-        // Clean from hanging arrays
-        const hbIndex = this.hangingBuyOrders.findIndex(o => o.orderId === report.clientOrderId || o.orderId === report.orderId.toString());
-        if (hbIndex >= 0) {
-            this.hangingBuyOrders.splice(hbIndex, 1);
-            isBuy = true;
-            isHanging = true;
-        }
-        const hsIndex = this.hangingSellOrders.findIndex(o => o.orderId === report.clientOrderId || o.orderId === report.orderId.toString());
-        if (hsIndex >= 0) {
-            this.hangingSellOrders.splice(hsIndex, 1);
-            isBuy = false;
-            isHanging = true;
-        }
-
-        if (report.orderStatus === "FILLED" && this.currentPair) {
-            const filledPrice = report.lastFilledPrice || report.originalPrice;
-            const totalQty = report.accumulatedFilledQty || report.originalQty;
-            
-            // Generate Ping-Pong Hanging Order
-            if (isBuy) {
-                // Bought, so we sell higher
-                const targetAsk = filledPrice * (1 + this.PING_PONG_SPREAD);
-                this.executor.executeMakerSell(this.currentPair, new Amount(totalQty), new Amount(targetAsk))
-                    .then(order => { if (order) this.hangingSellOrders.push(order); });
-            } else {
-                // Sold, so we buy lower
-                const targetBid = filledPrice * (1 - this.PING_PONG_SPREAD);
-                const quoteSpend = totalQty * targetBid;
-                this.executor.executeMakerBuy(this.currentPair, new Amount(quoteSpend), new Amount(targetBid))
-                    .then(order => { if (order) this.hangingBuyOrders.push(order); });
-            }
+        // O lado vem do relatório da exchange, que é autoritativo. A versão anterior
+        // inferia o lado a partir de qual array continha a ordem e caía num default
+        // `isBuy = true` quando não achava nenhuma — o que era o caso comum, já que o
+        // lock otimista fica com um id que nunca casa. O efeito era disparar a perna
+        // oposta na direção errada.
+        const now = TimeProvider.now();
+        if (report.side === "BUY") {
+            this.buyBlockedUntil = now + this.FILLED_ORDER_DELAY_MS;
+        } else if (report.side === "SELL") {
+            this.sellBlockedUntil = now + this.FILLED_ORDER_DELAY_MS;
         }
     }
 
@@ -227,7 +222,7 @@ export class MarketMakerCycle {
         tick.applyTopBid(l => { if (l) l.price.apply(v => bestBid = v); });
         tick.applyTopAsk(l => { if (l) l.price.apply(v => bestAsk = v); });
 
-        let { bids, asks, bidEnabled, askEnabled, q, effectiveSpread } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk, k);
+        let { bids, asks, bidEnabled, askEnabled, effectiveSpread } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk, k);
 
         // Enforce Post-Only limits for the tightest level (Level 0)
         // If the tightest level crosses, we adjust all levels relative to it
@@ -235,11 +230,6 @@ export class MarketMakerCycle {
             const shift = bids[0]!.price - (bestAsk * 0.99999);
             bids.forEach(b => b.price -= shift);
         }
-        if (asks.length > 0 && bestBid > 0 && asks[0]!.price <= bestBid) {
-            const shift = (bestAsk * 1.00001) - asks[0]!.price; // Wait, this should be bestBid * 1.00001
-            // Let's fix this inline below: asks.forEach(a => a.price += shift);
-        }
-
         if (asks.length > 0 && bestBid > 0 && asks[0]!.price <= bestBid) {
             const shift = (bestBid * 1.00001) - asks[0]!.price;
             asks.forEach(a => a.price += shift);
@@ -258,13 +248,14 @@ export class MarketMakerCycle {
             ? totalWealth * this.lotConfig.value
             : this.lotConfig.value;
 
-        // O skew de estoque é aplicado ANTES do piso de notional mínimo.
-        // A ordem inversa (piso antes do skew) fazia o skew empurrar o lote de volta
-        // para baixo do mínimo, bloqueando o nível — e como o skew só encolhe o lado
-        // comprador quando estamos long, o lado da compra morria em silêncio enquanto
-        // o da venda seguia ativo, produzindo deriva estrutural de estoque.
-        let buyLotQuote = baseLotQuote * Math.max(0.2, 1 - q * 1.5);
-        let sellLotQuote = baseLotQuote * Math.max(0.2, 1 + q * 1.5);
+        // Skew de estoque sobre o TAMANHO (modelo do Hummingbot), aplicado ANTES do piso
+        // de notional mínimo. A ordem inversa (piso antes do skew) fazia o skew empurrar
+        // o lote de volta para baixo do mínimo, bloqueando o nível — e como o skew só
+        // encolhe o lado comprador quando estamos long, o lado da compra morria em
+        // silêncio enquanto o da venda seguia ativo, produzindo deriva de estoque.
+        const { bidRatio, askRatio } = this.inventoryManager.getInventorySkewRatios(midPrice, baseLotQuote);
+        let buyLotQuote = baseLotQuote * bidRatio;
+        let sellLotQuote = baseLotQuote * askRatio;
 
         // O notional mínimo é uma restrição rígida da corretora, não uma preferência de
         // risco: se o skew pedir menos que o mínimo, postamos o mínimo para manter os
@@ -347,7 +338,7 @@ export class MarketMakerCycle {
             }
             lockedBase = Math.min(lockedBase, this.inventoryManager.baseBalance);
 
-            if (!this.activeBuyOrders[i] && bidEnabled && targetBid > 0) {
+            if (!this.activeBuyOrders[i] && bidEnabled && targetBid > 0 && now >= this.buyBlockedUntil) {
                 let finalBuyLevelQuote = buyLevelQuote;
                 if (buyLevelQuote + lockedQuote > this.inventoryManager.quoteBalance) {
                     finalBuyLevelQuote = this.inventoryManager.quoteBalance - lockedQuote;
@@ -375,7 +366,7 @@ export class MarketMakerCycle {
                 }
             }
 
-            if (!this.activeSellOrders[i] && askEnabled && targetAsk > 0) {
+            if (!this.activeSellOrders[i] && askEnabled && targetAsk > 0 && now >= this.sellBlockedUntil) {
                 let finalSellLevelBase = sellLevelBase;
                 if (sellLevelBase + lockedBase > this.inventoryManager.baseBalance) {
                     finalSellLevelBase = this.inventoryManager.baseBalance - lockedBase;
