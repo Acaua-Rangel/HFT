@@ -23,22 +23,23 @@ const SkewGraph = ({ telemetry }: { telemetry: any }) => {
   if (!telemetry || !telemetry.midPrice || telemetry.bid === 0) return (
     <div className="skew-graph-empty">Waiting for telemetry...</div>
   );
-  const { bid, ask, midPrice, q } = telemetry;
   
-  // We represent the spread visually
-  const spread = ask - bid;
-  const halfSpread = spread / 2;
-  const maxView = halfSpread * 4; // visual scale
+  const { midPrice, q, bids, asks } = telemetry;
   
-  // Center is midPrice
-  // Calculate percentage positions
+  // Use furthest bid/ask to calculate spread view
+  const furthestBid = bids && bids.length > 0 ? bids[bids.length - 1].price : telemetry.bid;
+  const furthestAsk = asks && asks.length > 0 ? asks[asks.length - 1].price : telemetry.ask;
+  const closestBid = bids && bids.length > 0 ? bids[0].price : telemetry.bid;
+  const closestAsk = asks && asks.length > 0 ? asks[0].price : telemetry.ask;
+  
+  const spread = furthestAsk - furthestBid;
+  const maxView = (spread / 2) * 1.5; // Expand view slightly past the furthest orders
+  
   const getPos = (price: number) => {
     let p = ((price - (midPrice - maxView)) / (maxView * 2)) * 100;
     return Math.max(0, Math.min(100, p));
   };
   
-  const bidPos = getPos(bid);
-  const askPos = getPos(ask);
   const midPos = getPos(midPrice);
   
   const skewPercentage = (q * 100).toFixed(1);
@@ -48,18 +49,37 @@ const SkewGraph = ({ telemetry }: { telemetry: any }) => {
   return (
     <div className="skew-graph-container" style={{ padding: '10px', background: 'rgba(0,0,0,0.2)', borderRadius: '8px' }}>
       <div className="skew-graph-labels" style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', fontSize: '12px', fontWeight: 'bold' }}>
-        <span style={{color: '#10b981'}}>Bid: {bid.toFixed(2)} {isVetoedBid ? '(VETO)' : ''}</span>
+        <span style={{color: '#10b981'}}>Bid: {closestBid.toFixed(2)} {isVetoedBid ? '(VETO)' : ''}</span>
         <span style={{color: '#888'}}>Mid: {midPrice.toFixed(2)}</span>
-        <span style={{color: '#ef4444'}}>Ask: {ask.toFixed(2)} {isVetoedAsk ? '(VETO)' : ''}</span>
+        <span style={{color: '#ef4444'}}>Ask: {closestAsk.toFixed(2)} {isVetoedAsk ? '(VETO)' : ''}</span>
       </div>
-      <div className="skew-graph-track" style={{ position: 'relative', height: '20px', background: '#333', borderRadius: '10px', overflow: 'hidden' }}>
-        <div className="skew-center-line" style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: '2px', background: '#666', zIndex: 1 }}></div>
-        <div className="skew-mid-dot" style={{ position: 'absolute', left: `${midPos}%`, top: '50%', transform: 'translate(-50%, -50%)', width: '8px', height: '8px', borderRadius: '50%', background: '#fff', zIndex: 2 }}></div>
-        {!isVetoedBid && <div className="skew-bid-box" style={{ position: 'absolute', left: `${bidPos}%`, width: `${midPos - bidPos}%`, height: '100%', background: 'rgba(16, 185, 129, 0.5)' }}></div>}
-        {!isVetoedAsk && <div className="skew-ask-box" style={{ position: 'absolute', left: `${midPos}%`, width: `${askPos - midPos}%`, height: '100%', background: 'rgba(239, 68, 68, 0.5)' }}></div>}
+      <div className="skew-graph-track" style={{ position: 'relative', height: '24px', background: '#333', borderRadius: '4px', overflow: 'hidden' }}>
+        <div className="skew-center-line" style={{ position: 'absolute', left: '50%', top: 0, bottom: 0, width: '2px', background: '#666', zIndex: 10 }}></div>
+        <div className="skew-mid-dot" style={{ position: 'absolute', left: `${midPos}%`, top: '50%', transform: 'translate(-50%, -50%)', width: '8px', height: '8px', borderRadius: '50%', background: '#fff', zIndex: 11 }}></div>
+        
+        {!isVetoedBid && bids && bids.map((b: any, i: number) => {
+           const bPos = getPos(b.price);
+           return (
+             <div key={`bid-${i}`} className="skew-bid-box" style={{ 
+               position: 'absolute', left: `${bPos}%`, width: `${midPos - bPos}%`, height: '100%', 
+               background: 'rgba(16, 185, 129, 0.25)', borderLeft: '1px solid rgba(16, 185, 129, 0.8)' 
+             }}></div>
+           )
+        })}
+        
+        {!isVetoedAsk && asks && asks.map((a: any, i: number) => {
+           const aPos = getPos(a.price);
+           return (
+             <div key={`ask-${i}`} className="skew-ask-box" style={{ 
+               position: 'absolute', left: `${midPos}%`, width: `${aPos - midPos}%`, height: '100%', 
+               background: 'rgba(239, 68, 68, 0.25)', borderRight: '1px solid rgba(239, 68, 68, 0.8)' 
+             }}></div>
+           )
+        })}
       </div>
-      <div className="skew-stats" style={{ marginTop: '10px', fontSize: '13px', textAlign: 'center' }}>
+      <div className="skew-stats" style={{ marginTop: '10px', fontSize: '13px', textAlign: 'center', display: 'flex', justifyContent: 'space-around' }}>
         <span>Inventory Skew (q): <strong style={{color: Math.abs(q) > 0.3 ? '#ef4444' : '#10b981'}}>{skewPercentage}%</strong></span>
+        <span>Order Levels: <strong style={{color: '#fff'}}>{bids?.length || 0}</strong></span>
       </div>
     </div>
   );
@@ -101,6 +121,7 @@ function App() {
   const [debouncedPair, setDebouncedPair] = useState<string>("btcbrl");
   const [systemErrors, setSystemErrors] = useState<string[]>([]);
   const [bnbDiscountLocked, setBnbDiscountLocked] = useState(false);
+  const [maxDrawdownPct, setMaxDrawdownPct] = useState<number>(0.02);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedPair(activePair), 1500);
@@ -140,6 +161,7 @@ function App() {
             if (data.safetyMultiplier !== undefined) setSafetyMultiplier(data.safetyMultiplier);
 
             if (data.maxInventorySkew !== undefined) setMaxInventorySkew(data.maxInventorySkew);
+            if (data.maxDrawdownPct !== undefined) setMaxDrawdownPct(data.maxDrawdownPct);
             if (data.bnbDiscountLocked !== undefined) setBnbDiscountLocked(data.bnbDiscountLocked);
                     } else if (data.type === 'TELEMETRY') {
             setTelemetry(data);
@@ -323,6 +345,21 @@ function App() {
         </div>
       )}
 
+      {telemetry?.killSwitchEngaged && (
+        <div className="kill-switch-overlay" style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(239, 68, 68, 0.9)', zIndex: 9999,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          color: 'white', textShadow: '0 2px 10px rgba(0,0,0,0.5)', backdropFilter: 'blur(10px)'
+        }}>
+          <h1 style={{ fontSize: '4rem', margin: '0 0 20px 0', fontWeight: '900' }}>SYSTEM HALTED</h1>
+          <h2 style={{ fontSize: '2rem', margin: 0 }}>GLOBAL STOP-LOSS ENGAGED</h2>
+          <p style={{ marginTop: '20px', fontSize: '1.2rem', maxWidth: '600px', textAlign: 'center' }}>
+            O limite máximo de perda (Drawdown) foi atingido. Todas as ordens foram canceladas e o motor foi desligado para proteger o capital remanescente.
+          </p>
+        </div>
+      )}
+
       <header className="header">
         <div className="header-title">
           <h1>Nexus HFT Engine</h1>
@@ -475,6 +512,22 @@ function App() {
                   </div>
                 </div>
             </div>
+
+            <div className="control-group" style={{ gridColumn: '1 / -1' }}>
+              <label style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <span style={{ display: 'flex', alignItems: 'center' }}>
+                  Max Drawdown (Kill Switch):
+                  <InfoTooltip text="Se a carteira cair mais que essa porcentagem em relação à máxima histórica, o robô corta as operações e cancela tudo." />
+                </span>
+                <strong style={{ color: '#ef4444' }}>{(maxDrawdownPct * 100).toFixed(1)}%</strong>
+              </label>
+              <input type="range" min="0.01" max="0.10" step="0.01" value={maxDrawdownPct} onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setMaxDrawdownPct(val);
+                wsRef.current?.send(JSON.stringify({ type: "UPDATE_RISK_PARAMS", maxDrawdownPct: val }));
+              }} style={{ width: '100%', accentColor: '#ef4444' }} />
+            </div>
+
           </div>
           
           <div className="telemetry-graph-wrapper">
@@ -630,6 +683,38 @@ function App() {
                {(balance !== null && telemetry?.midPrice !== undefined && telemetry?.baseBalance !== undefined) 
                  ? `${telemetry.quoteSymbol === 'USDT' || telemetry.quoteSymbol === 'FDUSD' ? '$' : 'R$'} ${((telemetry.baseBalance * telemetry.midPrice) + balance).toFixed(2)}` 
                  : '--'}
+            </div>
+          </div>
+          
+          <div className="glass-panel metric-card">
+            <div className="panel-title">Market Intensity ($k$)</div>
+            <div className="metric-value" style={{ fontSize: '14px', lineHeight: '1.4' }}>
+               {telemetry?.intensityK !== undefined ? (
+                 <div style={{ display: 'flex', flexDirection: 'column' }}>
+                   <span style={{ fontSize: '20px', fontWeight: 'bold', color: telemetry.intensityK > 2.0 ? '#ef4444' : telemetry.intensityK > 1.2 ? '#eab308' : '#10b981' }}>
+                     {telemetry.intensityK.toFixed(2)}
+                   </span>
+                   <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+                     {telemetry.intensityK > 2.0 ? 'High Frenzy' : telemetry.intensityK > 1.2 ? 'Active' : 'Calm'}
+                   </span>
+                 </div>
+               ) : '--'}
+            </div>
+          </div>
+          
+          <div className="glass-panel metric-card" style={{ borderRight: telemetry?.hangingOrdersCount > 0 ? '4px solid #f59e0b' : 'none' }}>
+            <div className="panel-title">Hanging Orders (Ping-Pong)</div>
+            <div className="metric-value" style={{ fontSize: '14px', lineHeight: '1.4' }}>
+               {telemetry?.hangingOrdersCount !== undefined ? (
+                 <div style={{ display: 'flex', flexDirection: 'column' }}>
+                   <span style={{ fontSize: '20px', fontWeight: 'bold', color: telemetry.hangingOrdersCount > 0 ? '#f59e0b' : '#94a3b8' }}>
+                     {telemetry.hangingOrdersCount} Orders
+                   </span>
+                   <span style={{ color: '#94a3b8', fontSize: '12px' }}>
+                     {telemetry.hangingOrdersValue > 0 ? `$${telemetry.hangingOrdersValue.toFixed(2)} Total` : 'No capital trapped'}
+                   </span>
+                 </div>
+               ) : '--'}
             </div>
           </div>
         </div>

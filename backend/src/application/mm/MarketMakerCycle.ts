@@ -4,6 +4,7 @@ import { Amount } from "../../domain/valueObjects/Amount";
 import { LocalStateManager } from "../LocalStateManager";
 import { CircuitBreaker } from "./CircuitBreaker";
 import { InventoryManager } from "./InventoryManager";
+import { BinanceUserDataStream, ExecutionReport } from "../../infrastructure/BinanceUserDataStream";
 
 export class MarketMakerCycle {
     public lotConfig: { mode: "PERCENTAGE" | "FIXED", value: number } = { mode: "PERCENTAGE", value: 0.05 };
@@ -11,45 +12,130 @@ export class MarketMakerCycle {
     public currentEffectiveBuyLotQuote: number = 0;
     public currentEffectiveSellLotQuote: number = 0;
 
-    public activeBuyOrder: ActiveOrder | null = null;
-    public activeSellOrder: ActiveOrder | null = null;
+    public activeBuyOrders: (ActiveOrder | null)[] = [];
+    public activeSellOrders: (ActiveOrder | null)[] = [];
+    
+    public hangingBuyOrders: ActiveOrder[] = [];
+    public hangingSellOrders: ActiveOrder[] = [];
 
     private readonly TOLERANCE_PCT = 0.0005; // 0.05% price deviation tolerance
     private readonly MAX_ORDER_AGE_MS = 10000; // 10 seconds
+    private readonly PING_PONG_SPREAD = 0.001; // 0.1% minimum profit for ping-pong
+    
+    public currentPair: Pair | null = null;
 
     constructor(
         private stateManager: LocalStateManager,
         private circuitBreaker: CircuitBreaker,
         private inventoryManager: InventoryManager,
-        public executor: OrderExecutor
-    ) {}
+        public executor: OrderExecutor,
+        private userDataStream?: BinanceUserDataStream
+    ) {
+        if (this.userDataStream) {
+            this.userDataStream.onOrderFilled(this.handleOrderFilled.bind(this));
+            this.userDataStream.onOrderCanceled(this.handleOrderCanceled.bind(this));
+        }
+    }
+
+    private async handleOrderFilled(report: ExecutionReport): Promise<void> {
+        let isBuy = true;
+        let isHanging = false;
+
+        // Clean from active arrays
+        for (let i = 0; i < this.activeBuyOrders.length; i++) {
+            if (this.activeBuyOrders[i]?.orderId === report.clientOrderId || this.activeBuyOrders[i]?.orderId === report.orderId.toString()) {
+                this.activeBuyOrders[i] = null;
+                isBuy = true;
+                isHanging = false;
+            }
+        }
+        for (let i = 0; i < this.activeSellOrders.length; i++) {
+            if (this.activeSellOrders[i]?.orderId === report.clientOrderId || this.activeSellOrders[i]?.orderId === report.orderId.toString()) {
+                this.activeSellOrders[i] = null;
+                isBuy = false;
+                isHanging = false;
+            }
+        }
+
+        // Clean from hanging arrays
+        const hbIndex = this.hangingBuyOrders.findIndex(o => o.orderId === report.clientOrderId || o.orderId === report.orderId.toString());
+        if (hbIndex >= 0) {
+            this.hangingBuyOrders.splice(hbIndex, 1);
+            isBuy = true;
+            isHanging = true;
+        }
+        const hsIndex = this.hangingSellOrders.findIndex(o => o.orderId === report.clientOrderId || o.orderId === report.orderId.toString());
+        if (hsIndex >= 0) {
+            this.hangingSellOrders.splice(hsIndex, 1);
+            isBuy = false;
+            isHanging = true;
+        }
+
+        if (report.orderStatus === "FILLED" && this.currentPair) {
+            const filledPrice = report.lastFilledPrice || report.originalPrice;
+            const totalQty = report.accumulatedFilledQty || report.originalQty;
+            
+            // Generate Ping-Pong Hanging Order
+            if (isBuy) {
+                // Bought, so we sell higher
+                const targetAsk = filledPrice * (1 + this.PING_PONG_SPREAD);
+                this.executor.executeMakerSell(this.currentPair, new Amount(totalQty), new Amount(targetAsk))
+                    .then(order => { if (order) this.hangingSellOrders.push(order); });
+            } else {
+                // Sold, so we buy lower
+                const targetBid = filledPrice * (1 - this.PING_PONG_SPREAD);
+                const quoteSpend = totalQty * targetBid;
+                this.executor.executeMakerBuy(this.currentPair, new Amount(quoteSpend), new Amount(targetBid))
+                    .then(order => { if (order) this.hangingBuyOrders.push(order); });
+            }
+        }
+    }
+
+    private async handleOrderCanceled(report: ExecutionReport): Promise<void> {
+        for (let i = 0; i < this.activeBuyOrders.length; i++) {
+            if (this.activeBuyOrders[i]?.orderId === report.clientOrderId || this.activeBuyOrders[i]?.orderId === report.orderId.toString()) {
+                this.activeBuyOrders[i] = null;
+            }
+        }
+        for (let i = 0; i < this.activeSellOrders.length; i++) {
+            if (this.activeSellOrders[i]?.orderId === report.clientOrderId || this.activeSellOrders[i]?.orderId === report.orderId.toString()) {
+                this.activeSellOrders[i] = null;
+            }
+        }
+        this.hangingBuyOrders = this.hangingBuyOrders.filter(o => o.orderId !== report.clientOrderId && o.orderId !== report.orderId.toString());
+        this.hangingSellOrders = this.hangingSellOrders.filter(o => o.orderId !== report.clientOrderId && o.orderId !== report.orderId.toString());
+    }
 
     private async checkAndCancelOrder(
         order: ActiveOrder | null, 
         newTargetPrice: number
-    ): Promise<ActiveOrder | null> {
-        if (!order) return null;
+    ): Promise<boolean> {
+        if (!order) return true; // Already clear
         
         const priceDeviation = Math.abs(order.price - newTargetPrice) / newTargetPrice;
         const age = Date.now() - order.timestamp;
         
         if (priceDeviation > this.TOLERANCE_PCT || age > this.MAX_ORDER_AGE_MS) {
             await this.executor.cancelOrder(order);
-            return null; // Cleared
+            return true; // Cleared
         }
-        return order; // Keep active
+        return false; // Keep active
     }
 
-    public async executeTick(pair: Pair, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false): Promise<void> {
+    public async executeTick(pair: Pair, feeRate: number = 0.001, volatilityPct: number = 0, isZeroFee: boolean = false, k: number = 1.5): Promise<void> {
+        this.currentPair = pair;
+        
+        // Ensure arrays match InventoryManager levels
+        while (this.activeBuyOrders.length < this.inventoryManager.ORDER_LEVELS) this.activeBuyOrders.push(null);
+        while (this.activeSellOrders.length < this.inventoryManager.ORDER_LEVELS) this.activeSellOrders.push(null);
+
         if (this.circuitBreaker.shouldPause(pair)) {
-            // Cancel all active orders if circuit breaker triggers
-            if (this.activeBuyOrder) {
-                await this.executor.cancelOrder(this.activeBuyOrder);
-                this.activeBuyOrder = null;
+            // Cancel all active orders if circuit breaker triggers (Hanging orders are optionally kept, but we'll cancel them for safety)
+            for (let i = 0; i < this.activeBuyOrders.length; i++) {
+                if (this.activeBuyOrders[i]) { await this.executor.cancelOrder(this.activeBuyOrders[i]!); this.activeBuyOrders[i] = null; }
             }
-            if (this.activeSellOrder) {
-                await this.executor.cancelOrder(this.activeSellOrder);
-                this.activeSellOrder = null;
+            for (let i = 0; i < this.activeSellOrders.length; i++) {
+                if (this.activeSellOrders[i]) { await this.executor.cancelOrder(this.activeSellOrders[i]!); this.activeSellOrders[i] = null; }
             }
             return;
         }
@@ -71,14 +157,22 @@ export class MarketMakerCycle {
         tick.applyTopBid(l => { if (l) l.price.apply(v => bestBid = v); });
         tick.applyTopAsk(l => { if (l) l.price.apply(v => bestAsk = v); });
 
-        let { bid, ask, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk);
+        let { bids, asks, bidEnabled, askEnabled, q } = this.inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFee, bestBid, bestAsk, k);
 
-        // Enforce Post-Only limits: never cross the spread
-        if (bestAsk > 0 && bid >= bestAsk) {
-            bid = bestAsk * 0.99999;
+        // Enforce Post-Only limits for the tightest level (Level 0)
+        // If the tightest level crosses, we adjust all levels relative to it
+        if (bids.length > 0 && bestAsk > 0 && bids[0].price >= bestAsk) {
+            const shift = bids[0].price - (bestAsk * 0.99999);
+            bids.forEach(b => b.price -= shift);
         }
-        if (bestBid > 0 && ask <= bestBid) {
-            ask = bestBid * 1.00001;
+        if (asks.length > 0 && bestBid > 0 && asks[0].price <= bestBid) {
+            const shift = (bestAsk * 1.00001) - asks[0].price; // Wait, this should be bestBid * 1.00001
+            // Let's fix this inline below: asks.forEach(a => a.price += shift);
+        }
+
+        if (asks.length > 0 && bestBid > 0 && asks[0].price <= bestBid) {
+            const shift = (bestBid * 1.00001) - asks[0].price;
+            asks.forEach(a => a.price += shift);
         }
 
         const totalWealth = (this.inventoryManager.baseBalance * midPrice) + this.inventoryManager.quoteBalance;
@@ -95,33 +189,40 @@ export class MarketMakerCycle {
         let buyLotQuote = baseLotQuote * Math.max(0.2, 1 - q * 1.5);
         let sellLotQuote = baseLotQuote * Math.max(0.2, 1 + q * 1.5);
 
-        buyLotQuote = Math.min(buyLotQuote, this.inventoryManager.quoteBalance);
-        let sellBaseQty = sellLotQuote / midPrice;
-        sellBaseQty = Math.min(sellBaseQty, this.inventoryManager.baseBalance);
-
         this.currentEffectiveBuyLotQuote = buyLotQuote;
         this.currentEffectiveSellLotQuote = sellLotQuote;
 
-        // Active Order Tracking & Cancellation
-        this.activeBuyOrder = await this.checkAndCancelOrder(this.activeBuyOrder, bid);
-        this.activeSellOrder = await this.checkAndCancelOrder(this.activeSellOrder, ask);
-        
         const promises: Promise<void>[] = [];
 
-        if (!this.activeBuyOrder && bidEnabled && bid > 0 && buyLotQuote >= MIN_ORDER_VALUE) {
-            const quoteToSpend = new Amount(buyLotQuote); 
-            promises.push(
-                this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(bid))
-                .then(order => { if (order) this.activeBuyOrder = order; })
-            );
-        }
+        for (let i = 0; i < this.inventoryManager.ORDER_LEVELS; i++) {
+            const targetBid = bids[i].price;
+            const targetAsk = asks[i].price;
+            const buyLevelQuote = buyLotQuote * bids[i].amountFactor;
+            const sellLevelBase = (sellLotQuote * asks[i].amountFactor) / midPrice;
 
-        if (!this.activeSellOrder && askEnabled && ask > 0 && (sellBaseQty * midPrice) >= MIN_ORDER_VALUE) {
-            const baseToSell = new Amount(sellBaseQty);
-            promises.push(
-                this.executor.executeMakerSell(pair, baseToSell, new Amount(ask))
-                .then(order => { if (order) this.activeSellOrder = order; })
-            );
+            // Active Order Tracking & Cancellation per level
+            const buyCleared = await this.checkAndCancelOrder(this.activeBuyOrders[i], targetBid);
+            if (buyCleared) this.activeBuyOrders[i] = null;
+            
+            const sellCleared = await this.checkAndCancelOrder(this.activeSellOrders[i], targetAsk);
+            if (sellCleared) this.activeSellOrders[i] = null;
+            
+            // Place new orders if empty
+            if (!this.activeBuyOrders[i] && bidEnabled && targetBid > 0 && buyLevelQuote >= MIN_ORDER_VALUE && buyLevelQuote <= this.inventoryManager.quoteBalance) {
+                const quoteToSpend = new Amount(buyLevelQuote); 
+                promises.push(
+                    this.executor.executeMakerBuy(pair, quoteToSpend, new Amount(targetBid))
+                    .then(order => { if (order) this.activeBuyOrders[i] = order; })
+                );
+            }
+
+            if (!this.activeSellOrders[i] && askEnabled && targetAsk > 0 && (sellLevelBase * midPrice) >= MIN_ORDER_VALUE && sellLevelBase <= this.inventoryManager.baseBalance) {
+                const baseToSell = new Amount(sellLevelBase);
+                promises.push(
+                    this.executor.executeMakerSell(pair, baseToSell, new Amount(targetAsk))
+                    .then(order => { if (order) this.activeSellOrders[i] = order; })
+                );
+            }
         }
 
         if (promises.length > 0) {

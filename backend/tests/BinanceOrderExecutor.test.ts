@@ -119,8 +119,8 @@ describe("BinanceOrderExecutor Logic Tests", () => {
     const mockClient = new MockWsClient();
     const executor = new BinanceOrderExecutor(mockClient, errRepo as any, txRepo as any, precisionFetcher as any, mockStateManager as any);
 
-    // Configure rate limiter to allow ONLY 4 requests (enough for 2 maker orders)
-    const rateLimiter = new ExecutionRateLimiter(4, 10000); 
+    // Configure rate limiter to allow ONLY 2 requests
+    const rateLimiter = new ExecutionRateLimiter(2, 10000); 
     executor.forceInjectWsClientForTests(mockClient, rateLimiter);
 
     // 1st order - Should pass

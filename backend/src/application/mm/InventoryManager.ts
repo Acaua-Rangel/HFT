@@ -16,6 +16,11 @@ export class InventoryManager {
     public baseBalance: number = 0;
     public quoteBalance: number = 0;
 
+    // Advanced Hummingbot Order Levels
+    public ORDER_LEVELS = 3;
+    public LEVEL_SPREAD_STEP = 0.0005; // 0.05%
+    public LEVEL_AMOUNT_FACTOR = 0.5; // Level 0: 1x, Level 1: 1.5x, Level 2: 2.0x
+
     constructor() {}
 
     /**
@@ -33,15 +38,18 @@ export class InventoryManager {
      * 2. The expected adverse price movement while holding inventory
      * 3. A minimum floor for ultra-quiet markets
      */
-        public getQuotes(
+    public getQuotes(
         midPrice: number, 
         feeRate: number = 0.001, 
         volatilityPct: number = 0, 
         isZeroFee: boolean = false, 
         bestBid: number = 0, 
-        bestAsk: number = 0
+        bestAsk: number = 0,
+        k: number = 1.5
     ): { 
-        bid: number, ask: number, bidEnabled: boolean, askEnabled: boolean, 
+        bids: { price: number, amountFactor: number }[], 
+        asks: { price: number, amountFactor: number }[], 
+        bidEnabled: boolean, askEnabled: boolean, 
         q: number, reservationPrice: number, effectiveSpread: number, minSpreadFloor: number, 
         bidDistancePct: number, askDistancePct: number, bidDistanceAbs: number, askDistanceAbs: number 
     } {
@@ -68,7 +76,7 @@ export class InventoryManager {
         }
 
         // === TRUE AVELLANEDA-STOIKOV MATHEMATICS ===
-        const k = 1.5; // Trade intensity (liquidity parameter)
+        // Trade intensity (k) is now passed in as a parameter (dynamic)
         const variance = volatilityPct * volatilityPct;
         const timeHorizon = 1.0; 
 
@@ -91,8 +99,21 @@ export class InventoryManager {
         const effectiveSpread = Math.max(avellanedaSpreadPct, minSpreadFloor);
         const baseHalfSpread = effectiveSpread / 2;
 
-        let bid = reservationPrice * (1 - baseHalfSpread);
-        let ask = reservationPrice * (1 + baseHalfSpread);
+        let bids: { price: number, amountFactor: number }[] = [];
+        let asks: { price: number, amountFactor: number }[] = [];
+
+        for (let i = 0; i < this.ORDER_LEVELS; i++) {
+            const levelSpreadAdd = i * this.LEVEL_SPREAD_STEP;
+            const amountFactor = 1 + (i * this.LEVEL_AMOUNT_FACTOR);
+            bids.push({
+                price: reservationPrice * (1 - baseHalfSpread - levelSpreadAdd),
+                amountFactor
+            });
+            asks.push({
+                price: reservationPrice * (1 + baseHalfSpread + levelSpreadAdd),
+                amountFactor
+            });
+        }
 
         // Top-of-book distance metrics
         let bidDistancePct = 0;
@@ -100,15 +121,15 @@ export class InventoryManager {
         let bidDistanceAbs = 0;
         let askDistanceAbs = 0;
 
-        if (bestBid > 0) {
-            bidDistancePct = (bestBid - bid) / bestBid * 100;
-            bidDistanceAbs = bestBid - bid;
+        if (bestBid > 0 && bids.length > 0) {
+            bidDistancePct = (bestBid - bids[0].price) / bestBid * 100;
+            bidDistanceAbs = bestBid - bids[0].price;
         }
-        if (bestAsk > 0) {
-            askDistancePct = (ask - bestAsk) / bestAsk * 100;
-            askDistanceAbs = ask - bestAsk;
+        if (bestAsk > 0 && asks.length > 0) {
+            askDistancePct = (asks[0].price - bestAsk) / bestAsk * 100;
+            askDistanceAbs = asks[0].price - bestAsk;
         }
 
-        return { bid, ask, bidEnabled, askEnabled, q, reservationPrice, effectiveSpread, minSpreadFloor, bidDistancePct, askDistancePct, bidDistanceAbs, askDistanceAbs };
+        return { bids, asks, bidEnabled, askEnabled, q, reservationPrice, effectiveSpread, minSpreadFloor, bidDistancePct, askDistancePct, bidDistanceAbs, askDistanceAbs };
     }
 }

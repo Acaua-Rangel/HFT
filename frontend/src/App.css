@@ -646,3 +646,13 @@
   opacity: 1;
   bottom: 130%;
 }
+
+@keyframes pulseRed {
+  0% { background: rgba(239, 68, 68, 0.8); }
+  50% { background: rgba(239, 68, 68, 0.95); }
+  100% { background: rgba(239, 68, 68, 0.8); }
+}
+
+.kill-switch-overlay {
+  animation: pulseRed 2s infinite ease-in-out;
+}

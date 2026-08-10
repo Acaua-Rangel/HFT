@@ -4,14 +4,25 @@ import { Tick } from "../domain/valueObjects/Tick";
 import { Amount } from "../domain/valueObjects/Amount";
 
 class IngestorCallbacks {
-  constructor(private readonly list: ((tick: Tick) => void)[] = []) {}
+  constructor(
+    private readonly list: ((tick: Tick) => void)[] = [],
+    private readonly tradeList: ((symbol: string, volume: number) => void)[] = []
+  ) {}
 
   public add(cb: (tick: Tick) => void): void {
     this.list.push(cb);
   }
 
+  public addTrade(cb: (symbol: string, volume: number) => void): void {
+    this.tradeList.push(cb);
+  }
+
   public notifyAll(tick: Tick): void {
     this.list.forEach((cb) => cb(tick));
+  }
+
+  public notifyTrade(symbol: string, volume: number): void {
+    this.tradeList.forEach((cb) => cb(symbol, volume));
   }
 }
 
@@ -125,6 +136,7 @@ export class BinancePriceIngestor implements PriceIngestor {
       }
 
       this.state.queueStream(streamName);
+      this.state.queueStream(`${symbolStr.toLowerCase()}@aggTrade`);
       this.state.registerSubscription(symbolStr, pair);
     });
   }
@@ -133,10 +145,25 @@ export class BinancePriceIngestor implements PriceIngestor {
     this.callbacks.add(callback);
   }
 
+  public onTrade(callback: (symbol: string, volume: number) => void): void {
+    this.callbacks.addTrade(callback);
+  }
+
   private handleMessage(event: MessageEvent): void {
     const rawString = String(event.data);
     const parsedData = JSON.parse(rawString);
-    this.processDepthStream(parsedData);
+    if (parsedData.stream && parsedData.stream.endsWith("@aggTrade")) {
+      this.processTradeStream(parsedData);
+    } else {
+      this.processDepthStream(parsedData);
+    }
+  }
+
+  private processTradeStream(payload: any): void {
+    if (!payload.data || !payload.data.q) return;
+    const symbol = payload.stream.replace("@aggTrade", "").toUpperCase();
+    const volume = parseFloat(payload.data.q);
+    this.callbacks.notifyTrade(symbol, volume);
   }
 
   private processDepthStream(payload: any): void {

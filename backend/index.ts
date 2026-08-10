@@ -19,6 +19,9 @@ import { CircuitBreaker } from "./src/application/mm/CircuitBreaker";
 import { InventoryManager } from "./src/application/mm/InventoryManager";
 import { MarketMakerCycle } from "./src/application/mm/MarketMakerCycle";
 import { ExecutionLock } from "./src/application/ExecutionLock";
+import { BinanceUserDataStream } from "./src/infrastructure/BinanceUserDataStream";
+import { TradeIntensityMonitor } from "./src/application/mm/TradeIntensityMonitor";
+import { RiskManager } from "./src/application/mm/RiskManager";
 
 const latestErrors: string[] = [];
 const originalConsoleError = console.error;
@@ -62,8 +65,17 @@ const liquidityMonitor = new LiquidityMonitor(stateManager);
 const circuitBreaker = new CircuitBreaker(volatilityMonitor, liquidityMonitor, () => currentLatency);
 const inventoryManager = new InventoryManager();
 
+const tradeIntensityMonitor = new TradeIntensityMonitor(ingestor);
+const riskManager = new RiskManager();
+
+const userDataStream = new BinanceUserDataStream(globalWsClient);
+if (currentMode === "LIVE") {
+    // Only connect UserDataStream if running in LIVE mode
+    userDataStream.connect().catch(console.error);
+}
+
 // Start in SIMULATION mode by default
-const mmCycle = new MarketMakerCycle(stateManager, circuitBreaker, inventoryManager, simExecutor);
+const mmCycle = new MarketMakerCycle(stateManager, circuitBreaker, inventoryManager, simExecutor, userDataStream);
 
 // Define Target Pair
 const btc = new Currency("BTC");
@@ -81,9 +93,11 @@ function switchMode(newMode: "LIVE" | "SIMULATION", simQuoteBalance?: number) {
         const initialQuote = simQuoteBalance ?? 1000;
         simExecutor.setInitialBalances(0, initialQuote);
         mmCycle.executor = simExecutor;
+        userDataStream.disconnect();
         console.log(`🧪 Switched to SIMULATION mode (Quote: ${initialQuote})`);
     } else {
         mmCycle.executor = binanceExecutor;
+        userDataStream.connect().catch(console.error);
         console.log(`⚡ Switched to LIVE mode`);
     }
 }
@@ -172,8 +186,22 @@ async function startHftEngine() {
                 
                 const feeRate = isZeroFeePromo ? 0 : 0.001;
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
+                
+                // --- Risk Manager (Kill Switch) ---
+                const totalWealth = (inventoryManager.baseBalance * midPrice) + inventoryManager.quoteBalance;
+                if (riskManager.checkGlobalStopLoss(totalWealth)) {
+                    // Halt completely
+                    isEngineRunning = false;
+                    console.error("🛑 ENGINE HALTED BY GLOBAL STOP LOSS.");
+                    // Force cancel all active
+                    mmCycle.activeBuyOrders.forEach(o => { if(o) mmCycle.executor.cancelOrder(o).catch(()=>{}); });
+                    mmCycle.activeSellOrders.forEach(o => { if(o) mmCycle.executor.cancelOrder(o).catch(()=>{}); });
+                    return;
+                }
+                
+                const currentK = tradeIntensityMonitor.getK(mmPair);
 
-                await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo);
+                await mmCycle.executeTick(mmPair, feeRate, volatilityPct, isZeroFeePromo, currentK);
             } catch (err) {
                 console.error("MM Loop Error:", err);
             }
@@ -258,6 +286,11 @@ const server = Bun.serve({
                 if (data.baseSpreadPct !== undefined) inventoryManager.BASE_SPREAD_PCT = data.baseSpreadPct;
                 if (data.maxInventorySkew !== undefined) inventoryManager.MAX_INVENTORY_SKEW = data.maxInventorySkew;
                 console.log(`🔧 Updated MM Params: Gamma=${inventoryManager.GAMMA}, Spread=${inventoryManager.BASE_SPREAD_PCT}, MaxSkew=${inventoryManager.MAX_INVENTORY_SKEW}`);
+            } else if (data.type === "UPDATE_RISK_PARAMS") {
+                if (data.maxDrawdownPct !== undefined) {
+                    (riskManager as any).MAX_DRAWDOWN_PCT = data.maxDrawdownPct;
+                    console.log(`🔧 Updated Risk Params: Max Drawdown=${data.maxDrawdownPct * 100}%`);
+                }
             } else if (data.type === "UPDATE_LOT_CONFIG") {
                 if (data.mode !== undefined) mmCycle.lotConfig.mode = data.mode;
                 if (data.value !== undefined) mmCycle.lotConfig.value = data.value;
@@ -306,14 +339,23 @@ setInterval(() => {
     tick.applyTopBid((level) => { if (level) level.price.apply(v => bestBid = v); });
     tick.applyTopAsk((level) => { if (level) level.price.apply(v => bestAsk = v); });
 
-    const quotes = inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFeePromo, bestBid, bestAsk);
+    const quotes = inventoryManager.getQuotes(midPrice, feeRate, volatilityPct, isZeroFeePromo, bestBid, bestAsk, tradeIntensityMonitor.getK(mmPair));
+    
+    // Calculate total value of hanging orders
+    const hangingOrdersValue = mmCycle.hangingOrders.reduce((acc, o) => {
+        let val = 0;
+        o.price.apply(p => { o.qty.apply(q => { val = p * q; }) });
+        return acc + val;
+    }, 0);
 
     server.publish("dashboard", JSON.stringify({
         type: "TELEMETRY",
         mode: currentMode,
         midPrice,
-        bid: quotes.bid,
-        ask: quotes.ask,
+        bid: quotes.bids[0]?.price || 0, // Fallback for legacy display
+        ask: quotes.asks[0]?.price || 0, // Fallback for legacy display
+        bids: quotes.bids,
+        asks: quotes.asks,
         q: quotes.q,
         reservationPrice: quotes.reservationPrice,
         baseBalance: inventoryManager.baseBalance,
@@ -341,7 +383,11 @@ setInterval(() => {
         bestAsk,
         isZeroFee: isZeroFeePromo,
         safetyMultiplier: inventoryManager.SAFETY_MULTIPLIER,
-        absoluteMinSpread: inventoryManager.ABSOLUTE_MIN_SPREAD
+        absoluteMinSpread: inventoryManager.ABSOLUTE_MIN_SPREAD,
+        intensityK: tradeIntensityMonitor.getK(mmPair),
+        killSwitchEngaged: riskManager.isKillSwitchEngaged,
+        hangingOrdersValue: hangingOrdersValue,
+        hangingOrdersCount: mmCycle.hangingOrders.length
     }));
 }, 1000);
 

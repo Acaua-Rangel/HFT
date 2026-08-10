@@ -38,6 +38,7 @@ describe("Adverse Selection Flow Test (Toxic Flow Protection)", () => {
                 return OrderFill.failed();
             }
             canExecuteBatch(count: number): boolean { return true; }
+            async cancelOrder(order: any): Promise<OrderFill> { return OrderFill.failed(); }
         }
         
         const mockExecutor = new MockExecutor();

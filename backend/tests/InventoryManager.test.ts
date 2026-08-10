@@ -21,8 +21,8 @@ describe("InventoryManager", () => {
         expect(quotes.q).toBe(0);
         expect(quotes.bidEnabled).toBeTrue();
         expect(quotes.askEnabled).toBeTrue();
-        expect(quotes.bid).toBeLessThan(100);
-        expect(quotes.ask).toBeGreaterThan(100);
+        expect(quotes.bids[0].price).toBeLessThan(100);
+        expect(quotes.asks[0].price).toBeGreaterThan(100);
     });
 
     it("should widen bid and tighten ask when long on base asset", () => {
@@ -40,8 +40,8 @@ describe("InventoryManager", () => {
         const balancedQuotes = balancedIm.getQuotes(100, feeRate, vol);
         
         expect(longQuotes.q).toBeGreaterThan(0);
-        expect(longQuotes.bid).toBeLessThan(balancedQuotes.bid);
-        expect(longQuotes.ask).toBeLessThan(balancedQuotes.ask);
+        expect(longQuotes.bids[0].price).toBeLessThan(balancedQuotes.bids[0].price);
+        expect(longQuotes.asks[0].price).toBeLessThan(balancedQuotes.asks[0].price);
     });
 
     it("should tighten bid and widen ask when short on base asset", () => {
@@ -59,8 +59,8 @@ describe("InventoryManager", () => {
         const balancedQuotes = balancedIm.getQuotes(100, feeRate, vol);
         
         expect(shortQuotes.q).toBeLessThan(0);
-        expect(shortQuotes.bid).toBeGreaterThan(balancedQuotes.bid);
-        expect(shortQuotes.ask).toBeGreaterThan(balancedQuotes.ask);
+        expect(shortQuotes.bids[0].price).toBeGreaterThan(balancedQuotes.bids[0].price);
+        expect(shortQuotes.asks[0].price).toBeGreaterThan(balancedQuotes.asks[0].price);
     });
 
     it("should disable bid if inventory skew exceeds max", () => {
