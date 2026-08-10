@@ -69,10 +69,7 @@ const tradeIntensityMonitor = new TradeIntensityMonitor(ingestor);
 const riskManager = new RiskManager();
 
 const userDataStream = new BinanceUserDataStream(globalWsClient);
-if (currentMode === "LIVE") {
-    // Only connect UserDataStream if running in LIVE mode
-    userDataStream.connect().catch(console.error);
-}
+// Only connect UserDataStream if running in LIVE mode (starts disconnected in SIMULATION)
 
 // Start in SIMULATION mode by default
 const mmCycle = new MarketMakerCycle(stateManager, circuitBreaker, inventoryManager, simExecutor, userDataStream);
@@ -186,6 +183,16 @@ async function startHftEngine() {
                 
                 const feeRate = isZeroFeePromo ? 0 : 0.001;
                 const volatilityPct = volatilityMonitor.getVolatilityPercentage(mmPair);
+                
+                // Fetch current midPrice
+                let midPrice = 0;
+                const book = stateManager.retrieveOrderBook(mmPair);
+                if (book) {
+                    const tick = book.getLatest();
+                    if (tick) {
+                        tick.getMidPrice()?.apply(v => midPrice = v);
+                    }
+                }
                 
                 // --- Risk Manager (Kill Switch) ---
                 const totalWealth = (inventoryManager.baseBalance * midPrice) + inventoryManager.quoteBalance;
@@ -344,9 +351,7 @@ setInterval(() => {
     // Calculate total value of hanging orders
     const allHangingOrders = [...mmCycle.hangingBuyOrders, ...mmCycle.hangingSellOrders];
     const hangingOrdersValue = allHangingOrders.reduce((acc, o) => {
-        let val = 0;
-        o.price.apply(p => { o.qty.apply(q => { val = p * q; }) });
-        return acc + val;
+        return acc + (o.price * o.qty);
     }, 0);
 
     server.publish("dashboard", JSON.stringify({
