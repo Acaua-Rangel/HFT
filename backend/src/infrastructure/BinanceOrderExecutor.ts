@@ -219,7 +219,7 @@ export class BinanceOrderExecutor implements OrderExecutor {
     this.rateLimiter = mockLimiter;
   }
 
-  private logError(type: string, message: string): void {
+  public logError(type: string, message: string): void {
     console.error(`[${type}] ${message}`);
     const entry = new ErrorLogEntry(
         { asString: () => crypto.randomUUID() } as any,

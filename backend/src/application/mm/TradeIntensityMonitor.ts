@@ -22,8 +22,8 @@ export class TradeIntensityMonitor {
         const tradesPerSecond = tradeCount / (this.WINDOW_MS / 1000);
         
         // Calculate dynamic K based on frequency of trades.
-        // Base K=1.5. If the market is frenetic (e.g., 10 trades/sec), K increases (1.5 + 10 * 0.1 = 2.5)
+        // Base K=5.0 (makes baseline spread tighter). If the market is frenetic, K increases faster.
         // Higher K shrinks the Avellaneda-Stoikov spread because order execution probability is higher.
-        return Math.max(1.0, 1.0 + (tradesPerSecond * 0.1));
+        return Math.max(5.0, 5.0 + (tradesPerSecond * 2.0));
     }
 }
