@@ -474,28 +474,65 @@ function App() {
                    <p style={{ marginTop: '5px', fontSize: '12px', textAlign: 'right' }}>{backtestProgress.toFixed(1)}%</p>
                 </div>
               )}
-              {backtestStatus === "COMPLETED" && backtestResults && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '15px', marginTop: '15px' }}>
-                  <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Initial Balance</div>
-                    <div style={{ fontSize: '16px', fontWeight: 'bold' }}>${simBalance.toFixed(2)}</div>
-                  </div>
-                  <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Final Balance (Quote)</div>
-                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: backtestResults.finalQuote >= simBalance ? '#10b981' : '#ef4444' }}>${backtestResults.finalQuote.toFixed(2)}</div>
-                  </div>
-                  <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Total Fees Paid</div>
-                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#eab308' }}>${backtestResults.totalFees.toFixed(2)}</div>
-                  </div>
-                  <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
-                    <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Net PnL</div>
-                    <div style={{ fontSize: '16px', fontWeight: 'bold', color: backtestResults.finalQuote >= simBalance ? '#10b981' : '#ef4444' }}>
-                      ${(backtestResults.finalQuote - simBalance).toFixed(2)} ({( ((backtestResults.finalQuote - simBalance) / simBalance) * 100 ).toFixed(2)}%)
+              {backtestStatus === "COMPLETED" && backtestResults && (() => {
+                // O bot quase nunca termina zerado em base: reportar só a perna em quote
+                // faz um resultado de -1% parecer -56%. O PnL real precisa marcar o
+                // estoque residual a mercado.
+                const initial = backtestResults.initialBalance ?? simBalance;
+                const finalBase = backtestResults.finalBase ?? 0;
+                const finalPrice = backtestResults.finalPrice ?? 0;
+                const inventoryValue = finalBase * finalPrice;
+                const equity = backtestResults.finalEquity ?? (backtestResults.finalQuote + inventoryValue);
+                const pnl = equity - initial;
+                const pnlPct = initial > 0 ? (pnl / initial) * 100 : 0;
+                const driftPct = backtestResults.benchmarkDriftPct !== undefined ? backtestResults.benchmarkDriftPct * 100 : null;
+                const good = pnl >= 0;
+
+                return (
+                  <div>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '15px', marginTop: '15px' }}>
+                      <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
+                        <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Initial Balance</div>
+                        <div style={{ fontSize: '16px', fontWeight: 'bold' }}>${initial.toFixed(2)}</div>
+                      </div>
+                      <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
+                        <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Final Equity (mark-to-market)</div>
+                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: good ? '#10b981' : '#ef4444' }}>${equity.toFixed(2)}</div>
+                        <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '3px' }}>
+                          ${backtestResults.finalQuote.toFixed(2)} quote + ${inventoryValue.toFixed(2)} inventory
+                        </div>
+                      </div>
+                      <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
+                        <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Total Fees Paid</div>
+                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#eab308' }}>${backtestResults.totalFees.toFixed(2)}</div>
+                      </div>
+                      <div style={{ background: '#222', padding: '10px', borderRadius: '6px' }}>
+                        <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '5px' }}>Net PnL</div>
+                        <div style={{ fontSize: '16px', fontWeight: 'bold', color: good ? '#10b981' : '#ef4444' }}>
+                          ${pnl.toFixed(2)} ({pnlPct.toFixed(2)}%)
+                        </div>
+                      </div>
+                    </div>
+
+                    <div style={{ marginTop: '12px', padding: '10px', background: 'rgba(0,0,0,0.25)', borderRadius: '6px', fontSize: '12px', color: '#94a3b8' }}>
+                      <div>
+                        Estoque final: <strong style={{ color: '#fff' }}>{finalBase.toFixed(8)}</strong> base
+                        {finalPrice > 0 && <> @ ${finalPrice.toFixed(2)}</>}
+                        {equity > 0 && <> — <strong style={{ color: finalBase * finalPrice / equity > 0.3 ? '#f59e0b' : '#fff' }}>
+                          {((inventoryValue / equity) * 100).toFixed(1)}%
+                        </strong> do patrimônio</>}
+                      </div>
+                      {driftPct !== null && (
+                        <div style={{ marginTop: '4px' }}>
+                          O ativo variou <strong style={{ color: driftPct >= 0 ? '#10b981' : '#ef4444' }}>{driftPct.toFixed(2)}%</strong> no período.
+                          Terminar comprado num mercado em queda transfere essa variação para o resultado —
+                          compare o PnL contra esse número antes de atribuí-lo à estratégia.
+                        </div>
+                      )}
                     </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
             </div>
           )}
         </div>

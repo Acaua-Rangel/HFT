@@ -580,15 +580,31 @@ async function executeBacktest(startTime: number, endTime: number, initialBalanc
         }
     
         TimeProvider.clearVirtualTime();
-        server.publish("dashboard", JSON.stringify({ 
-            type: "BACKTEST_STATUS", 
+
+        // Marca o estoque residual a mercado. Reportar só a perna em quote faz um bot que
+        // terminou comprado parecer catastrófico: com 1000 de capital inicial, terminar
+        // com 437 em quote e 0,0086 BTC é equity de ~990, não de 437.
+        const finalPrice = ticks.length > 0 ? ticks[ticks.length - 1].price : 0;
+        const finalBase = simExecutor.baseBalance;
+        const finalQuote = simExecutor.quoteBalance;
+        const finalEquity = finalQuote + (finalBase * finalPrice);
+        const btcDrift = ticks.length > 1 ? (finalPrice - ticks[0].price) / ticks[0].price : 0;
+
+        server.publish("dashboard", JSON.stringify({
+            type: "BACKTEST_STATUS",
             status: "COMPLETED",
-            finalBase: simExecutor.baseBalance,
-            finalQuote: simExecutor.quoteBalance,
+            initialBalance,
+            finalBase,
+            finalQuote,
+            finalPrice,
+            finalEquity,
+            // Quanto o próprio ativo andou no período: sem isso não dá para separar
+            // captura de spread de exposição direcional do estoque carregado.
+            benchmarkDriftPct: btcDrift,
             totalFees: simExecutor.totalFeesCollected
         }));
-    
-        console.log(`✅ Backtest completed! Final Quote: ${simExecutor.quoteBalance}`);
+
+        console.log(`✅ Backtest completed! Equity: ${finalEquity.toFixed(2)} (quote ${finalQuote.toFixed(2)} + base ${finalBase.toFixed(8)} @ ${finalPrice})`);
     } finally {
         // Precisa ser liberado mesmo se o laço lançar: preso em true, ele
         // desativaria a trava de latência no modo LIVE, que é justamente onde ela protege.
