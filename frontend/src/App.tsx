@@ -717,6 +717,24 @@ function App() {
                ) : '--'}
             </div>
           </div>
+
+          <div className="glass-panel metric-card">
+            <div className="panel-title">Active Memory Orders</div>
+            <div className="metric-value" style={{ fontSize: '12px', lineHeight: '1.6' }}>
+               {telemetry?.activeBuyCount !== undefined ? (
+                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                   <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981' }}>
+                     <span>{telemetry.activeBuyCount} Buys Open</span>
+                     <strong>${telemetry.activeBuyValue?.toFixed(2)}</strong>
+                   </div>
+                   <div style={{ display: 'flex', justifyContent: 'space-between', color: '#ef4444' }}>
+                     <span>{telemetry.activeSellCount} Sells Open</span>
+                     <strong>${telemetry.activeSellValue?.toFixed(2)}</strong>
+                   </div>
+                 </div>
+               ) : '--'}
+            </div>
+          </div>
         </div>
 
         {systemErrors.length > 0 && (

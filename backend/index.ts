@@ -361,6 +361,25 @@ setInterval(() => {
         return acc + (o.price * o.qty);
     }, 0);
 
+    // Calculate active order statistics
+    let activeBuyCount = 0;
+    let activeBuyValue = 0;
+    for (const o of mmCycle.activeBuyOrders) {
+        if (o) {
+            activeBuyCount++;
+            activeBuyValue += (o.qty * o.price);
+        }
+    }
+    
+    let activeSellCount = 0;
+    let activeSellValue = 0;
+    for (const o of mmCycle.activeSellOrders) {
+        if (o) {
+            activeSellCount++;
+            activeSellValue += (o.qty * o.price); // Represented in Quote currency for consistency
+        }
+    }
+
     server.publish("dashboard", JSON.stringify({
         type: "TELEMETRY",
         mode: currentMode,
@@ -400,7 +419,11 @@ setInterval(() => {
         intensityK: tradeIntensityMonitor.getK(mmPair),
         killSwitchEngaged: riskManager.isKillSwitchEngaged,
         hangingOrdersValue: hangingOrdersValue,
-        hangingOrdersCount: allHangingOrders.length
+        hangingOrdersCount: allHangingOrders.length,
+        activeBuyCount,
+        activeBuyValue,
+        activeSellCount,
+        activeSellValue
     }));
 }, 1000);
 
