@@ -69,7 +69,7 @@ export class SimulationOrderExecutor implements OrderExecutor {
         this.errorLogger.save(entry);
     }
 
-        private activeOrders = new Map<string, { order: ActiveOrder, pair: Pair, amountVal: number, truncatedQty: number }>();
+    private activeOrders = new Map<string, { order: ActiveOrder, pair: Pair, amountVal: number, truncatedQty: number, queuePosition: number }>();
 
     public async executeMakerBuy(pair: Pair, amount: Amount, price?: Amount): Promise<ActiveOrder | null> {
         return this.simulateOrder("BUY", pair, amount, price);
@@ -107,20 +107,37 @@ export class SimulationOrderExecutor implements OrderExecutor {
         console.log(`🧹 [SIM] Canceled all open orders for ${symbol}.`);
     }
 
-    public evaluateFills(bestBid: number, bestAsk: number): void {
+    public evaluateFills(bestBid: number, bestAsk: number, tickVolume: number = 0): void {
         const toDelete: string[] = [];
 
         for (const [orderId, simData] of this.activeOrders.entries()) {
             const { order, pair, amountVal, truncatedQty } = simData;
             
             let filled = false;
-            if (order.side === "BUY") {
-                if (bestAsk > 0 && bestAsk < order.price) {
-                    filled = true;
-                }
-            } else {
-                if (bestBid > 0 && bestBid > order.price) {
-                    filled = true;
+            const orderAge = TimeProvider.now() - order.timestamp;
+            
+            // Require order to sit for at least 100ms (latency simulation)
+            if (orderAge >= 100) {
+                if (order.side === "BUY") {
+                    // Crossing: Market traded completely past our order
+                    if (bestAsk > 0 && bestAsk < order.price) {
+                        filled = true;
+                    } 
+                    // Touching: Market reached our price, simulate queue depletion
+                    else if (bestBid > 0 && bestBid <= order.price || bestAsk > 0 && bestAsk <= order.price) {
+                        simData.queuePosition -= (tickVolume * 0.15); // Assume 15% of tick volume hits our side
+                        if (simData.queuePosition <= 0) filled = true;
+                    }
+                } else {
+                    // Crossing: Market traded completely past our order
+                    if (bestBid > 0 && bestBid > order.price) {
+                        filled = true;
+                    }
+                    // Touching: Market reached our price, simulate queue depletion
+                    else if (bestAsk > 0 && bestAsk >= order.price || bestBid > 0 && bestBid >= order.price) {
+                        simData.queuePosition -= (tickVolume * 0.15); // Assume 15% of tick volume hits our side
+                        if (simData.queuePosition <= 0) filled = true;
+                    }
                 }
             }
 
@@ -261,7 +278,17 @@ export class SimulationOrderExecutor implements OrderExecutor {
             timestamp: TimeProvider.now()
         };
 
-        this.activeOrders.set(activeOrder.orderId, { order: activeOrder, pair, amountVal, truncatedQty });
+        // Estimate initial queue size deterministically (max between 3x our order size or $10k equivalent in base asset)
+        const minBaseQueue = 10000 / roundedPrice;
+        const initialQueuePosition = Math.max(truncatedQty * 3, minBaseQueue);
+
+        this.activeOrders.set(activeOrder.orderId, { 
+            order: activeOrder, 
+            pair, 
+            amountVal, 
+            truncatedQty,
+            queuePosition: initialQueuePosition
+        });
         return activeOrder;
     }
 

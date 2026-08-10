@@ -488,7 +488,7 @@ async function executeBacktest(startTime: number, endTime: number, initialBalanc
             if (tickObj) {
                 tickObj.applyTopBid((l) => { if (l) l.price.apply(v => bestBid = v); });
                 tickObj.applyTopAsk((l) => { if (l) l.price.apply(v => bestAsk = v); });
-                simExecutor.evaluateFills(bestBid, bestAsk);
+                simExecutor.evaluateFills(bestBid, bestAsk, rawTick.volume);
             }
         }
 
